@@ -19,10 +19,14 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# Make ``src`` and sibling tab modules importable when streamlit launches us.
+# Make src/ importable and tab modules importable without going through the
+# app package (avoids a circular-import in Streamlit >= 1.41 where the runner
+# registers the script as sys.modules['app'] before the body finishes).
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
+_APP_DIR = Path(__file__).resolve().parent
+for _p in (_PROJECT_ROOT, _APP_DIR):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
 import streamlit as st  # noqa: E402
 
@@ -30,7 +34,7 @@ from src.config import configure_logging, load_config  # noqa: E402
 from src.library_manager import LibraryManager  # noqa: E402
 from src.mapping_store import MappingStore  # noqa: E402
 
-from app import tab_batch, tab_editor, tab_global_map, tab_library, tab_settings  # noqa: E402
+import tab_batch, tab_editor, tab_global_map, tab_library, tab_settings  # noqa: E402, E401
 
 
 st.set_page_config(layout="wide", page_title="Illustration Color Edit")
