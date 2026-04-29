@@ -1,0 +1,7 @@
+{
+  "paths": {
+    "input_dir": "./input",
+    "output_dir": "./output",
+    "metadata_dir": "./metadata"
+  }
+}

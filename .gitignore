@@ -1,0 +1,34 @@
+# Secrets and local config
+.env
+config.json
+color-config.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environment
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Working directories
+tmp/*
+!tmp/.gitkeep
+
+# Illustration files (local only — configure paths in config.json)
+input/
+output/
+metadata/
+
+# OS
+Thumbs.db
+.DS_Store

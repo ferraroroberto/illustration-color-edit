@@ -1,0 +1,31 @@
+{
+  "global_color_map": {
+    "#E74C3C": {
+      "target": "#333333",
+      "label": "red / bad",
+      "notes": "Strong negative semantic. Map to dark gray for high contrast."
+    },
+    "#2ECC71": {
+      "target": "#CCCCCC",
+      "label": "green / good",
+      "notes": "Positive semantic. Light gray reads as 'good' in print."
+    },
+    "#F1C40F": {
+      "target": "#888888",
+      "label": "yellow / warning",
+      "notes": "Mid gray for caution / neutral-warn states."
+    }
+  },
+  "matching": {
+    "nearest_enabled": true,
+    "metric": "lab",
+    "threshold": 10.0
+  },
+  "print_safety": {
+    "min_gray_value": "#EEEEEE",
+    "warn_only": true
+  },
+  "logging": {
+    "level": "INFO"
+  }
+}
