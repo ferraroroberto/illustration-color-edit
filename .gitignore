@@ -32,3 +32,6 @@ metadata/
 # OS
 Thumbs.db
 .DS_Store
+
+# temporary files
+tmp/
