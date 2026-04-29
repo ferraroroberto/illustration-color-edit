@@ -1,0 +1,294 @@
+"""
+Persistence for the global color map and per-illustration overrides.
+
+Two stores:
+
+* **Global color map** lives in ``config.json`` under ``global_color_map``.
+  This is the canonical "this red always becomes this gray" registry shared
+  across the whole book.
+
+* **Per-illustration mapping** lives in ``metadata/<filename>.mapping.json``.
+  It records: status (pending / in_progress / reviewed / exported), per-file
+  overrides, last-updated timestamp, and free-form notes.
+
+The store also computes a cross-library *history*: for each source color,
+how many distinct illustrations have mapped it to each target. The Editor
+tab uses this to surface suggestions like "the red #E74C3C was previously
+mapped to #333333 in 4 other illustrations — reuse?".
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import tempfile
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Iterable, Literal, Optional
+
+log = logging.getLogger(__name__)
+
+
+Status = Literal["pending", "in_progress", "reviewed", "exported"]
+VALID_STATUSES: tuple[Status, ...] = ("pending", "in_progress", "reviewed", "exported")
+
+
+# --------------------------------------------------------------------------- #
+# Per-illustration mapping
+# --------------------------------------------------------------------------- #
+@dataclass
+class IllustrationMapping:
+    """In-memory representation of ``metadata/<name>.mapping.json``."""
+
+    filename: str
+    status: Status = "pending"
+    overrides: dict[str, str] = field(default_factory=dict)
+    updated_at: str = ""
+    notes: str = ""
+
+    def touch(self) -> None:
+        self.updated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    def with_status(self, new_status: Status) -> "IllustrationMapping":
+        if new_status not in VALID_STATUSES:
+            raise ValueError(f"Invalid status {new_status!r}. Allowed: {VALID_STATUSES}")
+        self.status = new_status
+        self.touch()
+        return self
+
+    def to_dict(self) -> dict[str, object]:
+        d = asdict(self)
+        # Normalize hex case in stored data.
+        d["overrides"] = {k.upper(): v.upper() for k, v in self.overrides.items()}
+        return d
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, object]) -> "IllustrationMapping":
+        overrides_raw = raw.get("overrides") or {}
+        if not isinstance(overrides_raw, dict):
+            raise ValueError(f"'overrides' must be a dict, got {type(overrides_raw).__name__}")
+        return cls(
+            filename=str(raw.get("filename", "")),
+            status=_coerce_status(raw.get("status", "pending")),
+            overrides={str(k).upper(): str(v).upper() for k, v in overrides_raw.items()},
+            updated_at=str(raw.get("updated_at", "")),
+            notes=str(raw.get("notes", "")),
+        )
+
+
+def _coerce_status(value: object) -> Status:
+    s = str(value).lower()
+    if s not in VALID_STATUSES:
+        log.warning("Unknown status %r; defaulting to 'pending'.", value)
+        return "pending"
+    return s  # type: ignore[return-value]
+
+
+# --------------------------------------------------------------------------- #
+# Atomic JSON IO
+# --------------------------------------------------------------------------- #
+def _atomic_write_json(path: Path, payload: object) -> None:
+    """Write ``payload`` to ``path`` atomically (tempfile + rename)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=".tmp.", suffix=".json")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, sort_keys=False)
+            f.write("\n")
+        os.replace(tmp_name, path)
+    except Exception:
+        # Best-effort cleanup if rename failed.
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+# --------------------------------------------------------------------------- #
+# MappingStore
+# --------------------------------------------------------------------------- #
+@dataclass
+class MappingStore:
+    """
+    Manage the global color map (in ``config_path``) and per-illustration
+    overrides (in ``metadata_dir``).
+
+    All hex codes are stored canonical-uppercase (``#RRGGBB``).
+    """
+
+    config_path: Path
+    metadata_dir: Path
+
+    def __post_init__(self) -> None:
+        self.config_path = Path(self.config_path)
+        self.metadata_dir = Path(self.metadata_dir)
+
+    # ----- global map ------------------------------------------------------ #
+    def load_config_raw(self) -> dict[str, object]:
+        """Load the full ``config.json`` (or ``{}`` if it doesn't exist yet)."""
+        if not self.config_path.is_file():
+            return {}
+        return json.loads(self.config_path.read_text(encoding="utf-8"))
+
+    def load_global_map(self) -> dict[str, dict[str, str]]:
+        """Return the canonical-keyed global color map."""
+        raw = self.load_config_raw()
+        gm = raw.get("global_color_map", {}) or {}
+        return {
+            str(k).upper(): {
+                "target": str(v.get("target", "")).upper(),
+                "label": str(v.get("label", "")),
+                "notes": str(v.get("notes", "")),
+            }
+            for k, v in gm.items()
+        }
+
+    def save_global_map(self, mapping: dict[str, dict[str, str]]) -> None:
+        """Persist the global color map back into ``config.json`` in place."""
+        cleaned = {
+            str(k).upper(): {
+                "target": str(v.get("target", "")).upper(),
+                "label": str(v.get("label", "")),
+                "notes": str(v.get("notes", "")),
+            }
+            for k, v in mapping.items()
+        }
+        raw = self.load_config_raw()
+        raw["global_color_map"] = cleaned
+        _atomic_write_json(self.config_path, raw)
+
+    def upsert_global_entry(
+        self,
+        source_hex: str,
+        target_hex: str,
+        label: str = "",
+        notes: str = "",
+    ) -> None:
+        """Insert or update one global entry."""
+        gm = self.load_global_map()
+        gm[source_hex.upper()] = {
+            "target": target_hex.upper(),
+            "label": label,
+            "notes": notes,
+        }
+        self.save_global_map(gm)
+
+    def remove_global_entry(self, source_hex: str) -> bool:
+        gm = self.load_global_map()
+        if source_hex.upper() in gm:
+            del gm[source_hex.upper()]
+            self.save_global_map(gm)
+            return True
+        return False
+
+    # ----- per-illustration ------------------------------------------------ #
+    def metadata_path_for(self, svg_filename: str) -> Path:
+        """Return the metadata path for an illustration filename."""
+        # Strip directories — only the basename is meaningful.
+        base = Path(svg_filename).name
+        return self.metadata_dir / f"{base}.mapping.json"
+
+    def load_illustration(self, svg_filename: str) -> IllustrationMapping:
+        """
+        Load per-illustration mapping. If no metadata file exists yet,
+        return a fresh ``IllustrationMapping(status='pending')`` — does NOT
+        write anything to disk.
+        """
+        path = self.metadata_path_for(svg_filename)
+        base = Path(svg_filename).name
+        if not path.is_file():
+            return IllustrationMapping(filename=base)
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            log.error("Corrupt metadata at %s: %s. Returning empty mapping.", path, exc)
+            return IllustrationMapping(filename=base)
+        m = IllustrationMapping.from_dict(raw)
+        # Defensive: filename inside file should match what we asked for.
+        if m.filename != base:
+            log.warning("Metadata %s claims filename=%r, expected %r — using disk value.",
+                        path, m.filename, base)
+        return m
+
+    def save_illustration(self, mapping: IllustrationMapping) -> None:
+        """Persist a per-illustration mapping. Stamps ``updated_at``."""
+        if not mapping.filename:
+            raise ValueError("IllustrationMapping.filename must be set before saving.")
+        mapping.touch()
+        _atomic_write_json(self.metadata_path_for(mapping.filename), mapping.to_dict())
+
+    def delete_illustration(self, svg_filename: str) -> bool:
+        path = self.metadata_path_for(svg_filename)
+        if path.is_file():
+            path.unlink()
+            return True
+        return False
+
+    def all_illustrations(self) -> list[IllustrationMapping]:
+        """Load every per-illustration metadata file in ``metadata_dir``."""
+        if not self.metadata_dir.is_dir():
+            return []
+        out: list[IllustrationMapping] = []
+        for p in sorted(self.metadata_dir.glob("*.mapping.json")):
+            try:
+                raw = json.loads(p.read_text(encoding="utf-8"))
+                out.append(IllustrationMapping.from_dict(raw))
+            except (OSError, json.JSONDecodeError) as exc:
+                log.warning("Skipping unreadable metadata %s: %s", p, exc)
+        return out
+
+    # ----- cross-library history ------------------------------------------- #
+    def history(self) -> dict[str, dict[str, int]]:
+        """
+        Build cross-library mapping history.
+
+        Returns ``{source_hex: {target_hex: count}}`` — across all
+        per-illustration overrides AND the global map (which always
+        contributes count 1).
+        """
+        hist: dict[str, dict[str, int]] = {}
+
+        # Global map contributes 1 each.
+        for src, entry in self.load_global_map().items():
+            tgt = entry.get("target", "").upper()
+            if tgt:
+                hist.setdefault(src.upper(), {})[tgt] = hist.get(src.upper(), {}).get(tgt, 0) + 1
+
+        # Per-illustration overrides each contribute 1.
+        for m in self.all_illustrations():
+            for src, tgt in m.overrides.items():
+                hist.setdefault(src.upper(), {})[tgt.upper()] = (
+                    hist.get(src.upper(), {}).get(tgt.upper(), 0) + 1
+                )
+        return hist
+
+    def usage_counts(self) -> dict[str, int]:
+        """How many illustrations use each global-map source color."""
+        counts: dict[str, int] = {}
+        for m in self.all_illustrations():
+            for src in m.overrides:
+                counts[src.upper()] = counts.get(src.upper(), 0) + 1
+        return counts
+
+
+# --------------------------------------------------------------------------- #
+# Convenience helpers
+# --------------------------------------------------------------------------- #
+def merge_mappings(
+    global_map: dict[str, dict[str, str]],
+    overrides: dict[str, str],
+) -> dict[str, str]:
+    """
+    Flatten a global map plus per-illustration overrides into a single
+    ``source_hex -> target_hex`` dict suitable for the SVG writer.
+
+    Per-illustration overrides win on conflict.
+    """
+    out: dict[str, str] = {
+        k.upper(): v["target"].upper() for k, v in global_map.items() if v.get("target")
+    }
+    out.update({k.upper(): v.upper() for k, v in overrides.items()})
+    return out
