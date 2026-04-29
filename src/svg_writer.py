@@ -215,6 +215,31 @@ def apply_mapping(
     return body
 
 
+def write_png_from_svg(
+    svg_path: Path,
+    destination: Path,
+    dpi: int = 300,
+    inkscape_exe: str = "inkscape",
+) -> None:
+    """Rasterise an SVG file to a PNG at ``destination`` via Inkscape CLI."""
+    import subprocess
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        inkscape_exe,
+        str(svg_path),
+        "--export-type=png",
+        f"--export-dpi={dpi}",
+        f"--export-filename={destination}",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Inkscape failed (exit {result.returncode}): {result.stderr.strip()}"
+        )
+    log.info("Wrote PNG %s at %d dpi", destination, dpi)
+
+
 def write_converted_svg(
     source: Union[ParsedSVG, str, Path],
     mapping: dict[str, str],

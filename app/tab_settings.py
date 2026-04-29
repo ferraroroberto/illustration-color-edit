@@ -31,5 +31,12 @@ def render() -> None:
         "warn_only": cfg.print_safety.warn_only,
     })
 
+    st.markdown("### PNG export")
+    st.write({
+        "enabled": cfg.png_export.enabled,
+        "dpi": cfg.png_export.dpi,
+        "inkscape_path": cfg.png_export.inkscape_path,
+    })
+
     st.markdown("### Logging")
     st.write({"level": cfg.log_level})

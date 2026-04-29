@@ -63,6 +63,13 @@ illustration-color-edit/
 └── README.md
 ```
 
+## Prerequisites
+
+- **Python 3.11+**
+- **Inkscape 1.x** — required for PNG export. Install from [inkscape.org](https://inkscape.org).
+  On Windows the default path is `C:\Program Files\Inkscape\bin\inkscape.exe`; set
+  `png_export.inkscape_path` in `config.json` if it differs.
+
 ## Setup (Windows + PowerShell)
 
 ```powershell
@@ -102,8 +109,13 @@ root) or absolute.
 {
   "paths": {
     "input_dir": "./input",    // source SVGs (Affinity exports)
-    "output_dir": "./output",  // converted grayscale SVGs
+    "output_dir": "./output",  // converted grayscale SVGs + PNGs
     "metadata_dir": "./metadata"  // per-illustration mapping overrides
+  },
+  "png_export": {
+    "enabled": true,            // also write a .png alongside each output .svg
+    "dpi": 300,                 // rasterisation resolution (300 = standard print)
+    "inkscape_path": "inkscape" // full path if inkscape is not on PATH
   }
 }
 ```
@@ -147,13 +159,17 @@ The app has five horizontal tabs:
 
 1. **Library** — list all SVGs in `input/` with status badges
    (`pending` / `in_progress` / `reviewed` / `exported`). Click to open.
-2. **Editor** — side-by-side original vs. converted preview. Per-source-color
-   pickers with suggestions ("this red was previously mapped to #333333 in 4
-   other illustrations — reuse?"). Save / mark-reviewed.
+2. **Editor** — side-by-side original vs. converted live preview (updates instantly
+   on every color change). Per-source-color picker with editable hex input and
+   history suggestions. Source/destination color counts in the heading. Save /
+   mark-reviewed.
 3. **Global Map** — view and edit the global registry. Shows usage counts.
 4. **Batch Export** — convert every reviewed (or every) illustration in `input/`
-   using current mappings. Progress + summary report.
-5. **Settings** — paths, matching threshold, print-safety threshold.
+   using current mappings. Writes `<name>_grayscale.svg` and (when enabled)
+   `<name>_grayscale.png` at the configured DPI into `output/`. Progress + summary
+   report.
+5. **Settings** — paths, matching threshold, print-safety threshold, PNG export
+   settings.
 
 ## CLI batch usage
 
@@ -190,9 +206,11 @@ encountered (per file), and print-safety warnings.
    are also promoted to the global map.
 6. Repeat for the rest of the library.
 7. When everything is reviewed, run **Batch Export** (or `python -m src.cli
-   convert --only-reviewed`). Output SVGs land in `output/`.
-8. Re-open output SVGs in Affinity Designer 2 for any final touch-ups, then
-   place into the book layout.
+   convert --only-reviewed`). Each illustration produces `<name>_grayscale.svg`
+   and, when PNG export is enabled, `<name>_grayscale.png` in `output/`.
+8. Re-open `_grayscale.svg` files in Affinity Designer 2 for any final touch-ups,
+   then place into the book layout. Use the `_grayscale.png` files for raster-only
+   contexts (Word, presentations, web).
 
 ## Testing
 
@@ -219,15 +237,21 @@ The parser/writer round-trips:
 Everything else (paths, transforms, text, IDs, metadata, comments) is preserved
 byte-for-byte where possible so the round-trip back into Affinity is clean.
 
-## Optional Inkscape fallback
+## Inkscape usage
 
-If a particular SVG hits an edge case the parser doesn't handle cleanly (e.g.
-exotic CSS the in-house parser misses), pre-normalize it through Inkscape:
+Inkscape serves two roles in this project:
+
+**PNG export** (automatic) — the Batch Export tab calls Inkscape via CLI to
+rasterise each `_grayscale.svg` to a `_grayscale.png` at the configured DPI.
+Configure the path via `png_export.inkscape_path` in `config.json`.
+
+**SVG pre-normalisation** (manual, if needed) — if a particular SVG hits an edge
+case the in-house parser doesn't handle cleanly (exotic CSS, unusual structure),
+pre-normalise it through Inkscape before importing:
 
 ```powershell
 & "C:\Program Files\Inkscape\bin\inkscape.exe" --export-plain-svg `
     --export-filename=tmp\figure-01.normalized.svg input\figure-01.svg
 ```
 
-then point the app at `tmp\figure-01.normalized.svg`. There's no automatic
-hand-off — Affinity Designer 2 itself produces clean SVG in practice.
+Affinity Designer 2 produces clean SVG in practice, so this is rarely needed.

@@ -38,6 +38,13 @@ class PrintSafetyConfig:
 
 
 @dataclass
+class PngExportConfig:
+    enabled: bool = True
+    dpi: int = 300
+    inkscape_path: str = "inkscape"
+
+
+@dataclass
 class PathsConfig:
     input_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "input")
     output_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "output")
@@ -51,6 +58,7 @@ class AppConfig:
     global_color_map: dict[str, dict[str, str]] = field(default_factory=dict)
     matching: MatchingConfig = field(default_factory=MatchingConfig)
     print_safety: PrintSafetyConfig = field(default_factory=PrintSafetyConfig)
+    png_export: PngExportConfig = field(default_factory=PngExportConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
     log_level: str = "INFO"
     source_path: Optional[Path] = None
@@ -116,6 +124,13 @@ def load_config() -> AppConfig:
     cfg.print_safety = PrintSafetyConfig(
         min_gray_value=str(safety.get("min_gray_value", "#EEEEEE")).upper(),
         warn_only=bool(safety.get("warn_only", True)),
+    )
+
+    png = path_raw.get("png_export", {})
+    cfg.png_export = PngExportConfig(
+        enabled=bool(png.get("enabled", True)),
+        dpi=int(png.get("dpi", 300)),
+        inkscape_path=str(png.get("inkscape_path", "inkscape")),
     )
 
     cfg.log_level = str(color_raw.get("logging", {}).get("level", "INFO")).upper()
