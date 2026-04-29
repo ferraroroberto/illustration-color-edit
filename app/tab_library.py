@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from app.common import status_badge
+from common import status_badge
 from src.library_manager import LibraryManager
 
 

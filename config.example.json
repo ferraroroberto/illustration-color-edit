@@ -3,5 +3,10 @@
     "input_dir": "./input",
     "output_dir": "./output",
     "metadata_dir": "./metadata"
+  },
+  "png_export": {
+    "enabled": true,
+    "dpi": 300,
+    "inkscape_path": "inkscape"
   }
 }

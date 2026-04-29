@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import re
+
 import streamlit as st
 
-from app.common import (
+from common import (
     cached_color_extract,
     color_swatch,
     fresh_mapper,
@@ -16,6 +18,20 @@ from src.library_manager import LibraryManager
 from src.mapping_store import MappingStore, merge_mappings
 from src.print_safety import check_mapping
 from src.svg_writer import apply_mapping_with_report
+
+_HEX_RE = re.compile(r"^#?([0-9A-Fa-f]{6})$")
+
+
+def _normalize_hex(raw: str) -> str | None:
+    m = _HEX_RE.match(raw.strip())
+    return f"#{m.group(1).upper()}" if m else None
+
+
+def _apply_hex_input(hk: str, pk: str) -> None:
+    """on_change callback: push a valid hex from the text input into the color picker."""
+    normalized = _normalize_hex(st.session_state.get(hk, ""))
+    if normalized:
+        st.session_state[pk] = normalized
 
 
 def render() -> None:
@@ -53,7 +69,14 @@ def render() -> None:
     mapper = fresh_mapper().with_overrides(illu.overrides)
     history = store.history()
 
-    picks: dict[str, str] = dict(st.session_state.editor_picks)
+    saved_picks = dict(st.session_state.editor_picks)
+    picks: dict[str, str] = {}
+    for _src in colors:
+        _key = f"pick_{current}_{_src}"
+        if _key in st.session_state:
+            picks[_src] = st.session_state[_key].upper()
+        elif _src in saved_picks:
+            picks[_src] = saved_picks[_src]
 
     suggestions = {h: mapper.suggest(h) for h in sorted(colors)}
     effective: dict[str, str] = {}
@@ -77,7 +100,10 @@ def render() -> None:
         render_inline_svg(converted_bytes, height=480)
 
     st.divider()
-    st.markdown(f"### Color mapping — {len(colors)} unique source colors")
+    unique_dst = len(set(effective.values()))
+    st.markdown(
+        f"### Color mapping — {len(colors)} source · {unique_dst} unique destination"
+    )
 
     safety_warnings = check_mapping(effective, cfg.print_safety)
     safety_targets = {w.target for w in safety_warnings}
@@ -87,7 +113,8 @@ def render() -> None:
         sug = suggestions[src_hex]
         history_picks = suggest_from_history(src_hex, history)
         with st.container(border=True):
-            row = st.columns([1, 2, 2, 3, 2])
+            # col weights: source | match | picker | hex-input | history | safety
+            row = st.columns([1, 2, 1, 2, 3, 2])
             row[0].markdown(
                 f"{color_swatch(src_hex)} <code>{src_hex}</code><br>"
                 f"<small>{count} uses</small>",
@@ -108,37 +135,63 @@ def render() -> None:
                 detail = "no exact or near match"
             row[1].markdown(f"{badge}<br><small>{detail}</small>", unsafe_allow_html=True)
 
+            pick_key = f"pick_{current}_{src_hex}"
+            hex_key = f"hex_{current}_{src_hex}"
+            hist_key = f"hist_{current}_{src_hex}"
+
             initial = (
                 picks.get(src_hex)
                 or illu.overrides.get(src_hex)
                 or (sug.target if sug.target else "#888888")
             )
+
+            # Detect whether the color picker changed since the last rerun.
+            current_pick_val = st.session_state.get(pick_key, initial).upper()
+            prev_pick_val = (saved_picks.get(src_hex) or initial).upper()
+            picker_changed = current_pick_val != prev_pick_val
+
+            # Keep the hex text input in sync with the color picker.
+            if hex_key not in st.session_state or picker_changed:
+                st.session_state[hex_key] = current_pick_val
+
+            # Reset the history selectbox whenever the color picker is changed directly.
+            if picker_changed:
+                st.session_state[hist_key] = "(keep current)"
+
             picked = row[2].color_picker(
                 "target",
                 value=initial,
-                key=f"pick_{current}_{src_hex}",
+                key=pick_key,
                 label_visibility="collapsed",
             ).upper()
 
+            row[3].text_input(
+                "hex",
+                key=hex_key,
+                label_visibility="collapsed",
+                on_change=_apply_hex_input,
+                args=(hex_key, pick_key),
+            )
+
             if history_picks:
                 opts = [f"{t} ({c}x)" for t, c in history_picks[:5]]
-                chosen = row[3].selectbox(
+                chosen = row[4].selectbox(
                     "history",
                     options=["(keep current)"] + opts,
-                    key=f"hist_{current}_{src_hex}",
+                    key=hist_key,
                     label_visibility="collapsed",
                 )
                 if chosen != "(keep current)":
                     picked = chosen.split(" ", 1)[0].upper()
             else:
-                row[3].markdown("<small>no history yet</small>", unsafe_allow_html=True)
+                row[4].markdown("<small>no history yet</small>", unsafe_allow_html=True)
 
             if picked in safety_targets:
-                row[4].warning("⚠ light for print")
+                row[5].warning("⚠ light for print")
             elif gray_value(picked) <= 16:
-                row[4].caption("very dark — OK")
+                row[5].caption("very dark — OK")
             else:
-                row[4].caption(f"luminance {gray_value(picked)}")
+                row[5].caption(f"luminance {gray_value(picked)}")
 
             picks[src_hex] = picked
 

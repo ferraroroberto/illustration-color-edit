@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from app.common import color_swatch
+from common import color_swatch
 from src.mapping_store import MappingStore
 
 
