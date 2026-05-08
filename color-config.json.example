@@ -16,6 +16,33 @@
       "notes": "Mid gray for caution / neutral-warn states."
     }
   },
+  "cmyk_correction_map": {
+    "#000000": {
+      "target": "#0A0A0A",
+      "label": "pure black → near-black",
+      "notes": "Pure RGB #000 often converts to rich black (CMY+K) which can register-shift on press. Nudging slightly off pure black biases the ICC conversion toward K-only."
+    },
+    "#FFFFFF": {
+      "target": "#FFFFFF",
+      "label": "paper white",
+      "notes": "Identity. Documented so the entry exists in the UI for confirmation."
+    },
+    "#E74C3C": {
+      "target": "#D14B3C",
+      "label": "saturated red → print-safe red",
+      "notes": "Out-of-CMYK-gamut reds get muddy after ICC clip. Pre-desaturating slightly lands a cleaner press red."
+    },
+    "#2ECC71": {
+      "target": "#3DB36A",
+      "label": "saturated green → print-safe green",
+      "notes": "Vivid RGB greens are far outside CMYK gamut. Pulling toward a less saturated green avoids the worst of the clip."
+    },
+    "#1F6EB0": {
+      "target": "#2A6FA8",
+      "label": "vivid blue → print-safe blue",
+      "notes": "Pure cyan-blues clip on uncoated stock. Slight desaturation prints cleaner."
+    }
+  },
   "matching": {
     "nearest_enabled": true,
     "metric": "lab",

@@ -40,11 +40,22 @@ VALID_STATUSES: tuple[Status, ...] = ("pending", "in_progress", "reviewed", "exp
 # --------------------------------------------------------------------------- #
 @dataclass
 class IllustrationMapping:
-    """In-memory representation of ``metadata/<name>.mapping.json``."""
+    """In-memory representation of ``metadata/<name>.mapping.json``.
+
+    Carries state for **both** pipelines on the same illustration:
+
+    * ``status`` + ``overrides`` — the grayscale workflow.
+    * ``cmyk_status`` + ``cmyk_overrides`` — the CMYK print-export workflow.
+
+    The two are independent — an illustration can be ``reviewed`` for grayscale
+    while still ``pending`` for CMYK, and vice versa.
+    """
 
     filename: str
     status: Status = "pending"
     overrides: dict[str, str] = field(default_factory=dict)
+    cmyk_status: Status = "pending"
+    cmyk_overrides: dict[str, str] = field(default_factory=dict)
     updated_at: str = ""
     notes: str = ""
 
@@ -58,10 +69,18 @@ class IllustrationMapping:
         self.touch()
         return self
 
+    def with_cmyk_status(self, new_status: Status) -> "IllustrationMapping":
+        if new_status not in VALID_STATUSES:
+            raise ValueError(f"Invalid status {new_status!r}. Allowed: {VALID_STATUSES}")
+        self.cmyk_status = new_status
+        self.touch()
+        return self
+
     def to_dict(self) -> dict[str, object]:
         d = asdict(self)
         # Normalize hex case in stored data.
         d["overrides"] = {k.upper(): v.upper() for k, v in self.overrides.items()}
+        d["cmyk_overrides"] = {k.upper(): v.upper() for k, v in self.cmyk_overrides.items()}
         return d
 
     @classmethod
@@ -69,10 +88,15 @@ class IllustrationMapping:
         overrides_raw = raw.get("overrides") or {}
         if not isinstance(overrides_raw, dict):
             raise ValueError(f"'overrides' must be a dict, got {type(overrides_raw).__name__}")
+        cmyk_raw = raw.get("cmyk_overrides") or {}
+        if not isinstance(cmyk_raw, dict):
+            raise ValueError(f"'cmyk_overrides' must be a dict, got {type(cmyk_raw).__name__}")
         return cls(
             filename=str(raw.get("filename", "")),
             status=_coerce_status(raw.get("status", "pending")),
             overrides={str(k).upper(): str(v).upper() for k, v in overrides_raw.items()},
+            cmyk_status=_coerce_status(raw.get("cmyk_status", "pending")),
+            cmyk_overrides={str(k).upper(): str(v).upper() for k, v in cmyk_raw.items()},
             updated_at=str(raw.get("updated_at", "")),
             notes=str(raw.get("notes", "")),
         )
@@ -184,6 +208,63 @@ class MappingStore:
             return True
         return False
 
+    # ----- CMYK correction map (parallel to global map) -------------------- #
+    def load_cmyk_correction_map(self) -> dict[str, dict[str, str]]:
+        """Return the canonical-keyed CMYK pre-correction map.
+
+        Mirrors :meth:`load_global_map` but reads ``cmyk_correction_map`` from
+        ``config.json``. Values are RGB→RGB pre-corrections that nudge colors
+        into a print-safe RGB starting point before the ICC profile does the
+        final CMYK conversion. See ``docs/2026-05-07-cmyk-pipeline.md``.
+        """
+        raw = self.load_config_raw()
+        gm = raw.get("cmyk_correction_map", {}) or {}
+        return {
+            str(k).upper(): {
+                "target": str(v.get("target", "")).upper(),
+                "label": str(v.get("label", "")),
+                "notes": str(v.get("notes", "")),
+            }
+            for k, v in gm.items()
+        }
+
+    def save_cmyk_correction_map(self, mapping: dict[str, dict[str, str]]) -> None:
+        """Persist the CMYK pre-correction map back into ``config.json``."""
+        cleaned = {
+            str(k).upper(): {
+                "target": str(v.get("target", "")).upper(),
+                "label": str(v.get("label", "")),
+                "notes": str(v.get("notes", "")),
+            }
+            for k, v in mapping.items()
+        }
+        raw = self.load_config_raw()
+        raw["cmyk_correction_map"] = cleaned
+        _atomic_write_json(self.config_path, raw)
+
+    def upsert_cmyk_correction_entry(
+        self,
+        source_hex: str,
+        target_hex: str,
+        label: str = "",
+        notes: str = "",
+    ) -> None:
+        gm = self.load_cmyk_correction_map()
+        gm[source_hex.upper()] = {
+            "target": target_hex.upper(),
+            "label": label,
+            "notes": notes,
+        }
+        self.save_cmyk_correction_map(gm)
+
+    def remove_cmyk_correction_entry(self, source_hex: str) -> bool:
+        gm = self.load_cmyk_correction_map()
+        if source_hex.upper() in gm:
+            del gm[source_hex.upper()]
+            self.save_cmyk_correction_map(gm)
+            return True
+        return False
+
     # ----- per-illustration ------------------------------------------------ #
     def metadata_path_for(self, svg_filename: str) -> Path:
         """Return the metadata path for an illustration filename."""
@@ -273,6 +354,34 @@ class MappingStore:
                 counts[src.upper()] = counts.get(src.upper(), 0) + 1
         return counts
 
+    # ----- CMYK history & usage (parallel to grayscale) -------------------- #
+    def cmyk_history(self) -> dict[str, dict[str, int]]:
+        """Cross-library CMYK mapping history.
+
+        Returns ``{source_hex: {target_hex: count}}`` aggregated across the
+        global ``cmyk_correction_map`` and every per-illustration
+        ``cmyk_overrides`` block.
+        """
+        hist: dict[str, dict[str, int]] = {}
+        for src, entry in self.load_cmyk_correction_map().items():
+            tgt = entry.get("target", "").upper()
+            if tgt:
+                hist.setdefault(src.upper(), {})[tgt] = hist.get(src.upper(), {}).get(tgt, 0) + 1
+        for m in self.all_illustrations():
+            for src, tgt in m.cmyk_overrides.items():
+                hist.setdefault(src.upper(), {})[tgt.upper()] = (
+                    hist.get(src.upper(), {}).get(tgt.upper(), 0) + 1
+                )
+        return hist
+
+    def cmyk_usage_counts(self) -> dict[str, int]:
+        """How many illustrations have a per-file override for each source color."""
+        counts: dict[str, int] = {}
+        for m in self.all_illustrations():
+            for src in m.cmyk_overrides:
+                counts[src.upper()] = counts.get(src.upper(), 0) + 1
+        return counts
+
 
 # --------------------------------------------------------------------------- #
 # Convenience helpers
@@ -285,7 +394,9 @@ def merge_mappings(
     Flatten a global map plus per-illustration overrides into a single
     ``source_hex -> target_hex`` dict suitable for the SVG writer.
 
-    Per-illustration overrides win on conflict.
+    Per-illustration overrides win on conflict. Used for both pipelines:
+    pass ``global_color_map`` + ``overrides`` for grayscale,
+    ``cmyk_correction_map`` + ``cmyk_overrides`` for CMYK pre-correction.
     """
     out: dict[str, str] = {
         k.upper(): v["target"].upper() for k, v in global_map.items() if v.get("target")

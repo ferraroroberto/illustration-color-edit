@@ -27,6 +27,7 @@ tmp/*
 # Illustration files (local only — configure paths in config.json)
 input/
 output/
+output_cmyk/
 metadata/
 
 # OS
@@ -35,3 +36,8 @@ Thumbs.db
 
 # temporary files
 tmp/
+
+# ICC profiles — large binaries / licensing varies; keep folder, ignore contents
+profiles/*
+!profiles/.gitkeep
+!profiles/README.txt

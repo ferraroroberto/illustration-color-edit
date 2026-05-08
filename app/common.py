@@ -7,6 +7,10 @@ lives here. Pure data logic stays in ``src/``.
 
 from __future__ import annotations
 
+import logging
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import streamlit as st
@@ -14,6 +18,8 @@ import streamlit as st
 from src.color_mapper import ColorMapper
 from src.mapping_store import MappingStore
 from src.svg_parser import parse_svg
+
+log = logging.getLogger(__name__)
 
 
 # --------------------------------------------------------------------------- #
@@ -29,17 +35,55 @@ def cached_color_extract(path_str: str, mtime: float) -> dict[str, int]:
 # --------------------------------------------------------------------------- #
 # Inline rendering
 # --------------------------------------------------------------------------- #
-def render_inline_svg(svg_bytes: bytes, *, height: int = 480) -> None:
-    """Render raw SVG bytes inline. Strips XML decl so HTML doesn't choke."""
+def render_inline_svg(
+    svg_bytes: bytes,
+    *,
+    height: int = 480,
+    aspect: str | None = None,
+) -> None:
+    """Render raw SVG bytes inline. Strips XML decl so HTML doesn't choke.
+
+    If ``aspect`` is supplied (e.g. ``"1/1"``), the container uses
+    ``width:100%`` + ``aspect-ratio`` instead of a fixed pixel height —
+    useful when stacking previews in equal-width columns and you want
+    them to share visible size with adjacent ``st.image`` panels.
+    """
     text = svg_bytes.decode("utf-8", errors="replace")
     if text.lstrip().startswith("<?xml"):
         text = text.split("?>", 1)[1].lstrip()
+    if aspect:
+        size_style = f"width:100%;aspect-ratio:{aspect};"
+    else:
+        size_style = f"height:{height}px;"
     wrapper = (
         f'<div style="background:#fff;border:1px solid #e0e0e0;border-radius:6px;'
-        f'padding:8px;height:{height}px;overflow:auto;display:flex;'
+        f'padding:8px;{size_style}overflow:auto;display:flex;'
         f'align-items:center;justify-content:center;">{text}</div>'
     )
     st.markdown(wrapper, unsafe_allow_html=True)
+
+
+def open_in_explorer(path: Path) -> tuple[bool, str]:
+    """Open ``path`` in the OS file browser. Returns ``(success, message)``.
+
+    Cross-platform: Windows uses ``os.startfile``, macOS uses ``open``,
+    Linux uses ``xdg-open``. The UI calls this from a button; failures
+    are surfaced to the user via the returned message rather than raising.
+    """
+    p = Path(path)
+    if not p.exists():
+        return False, f"Path does not exist: {p}"
+    try:
+        if sys.platform.startswith("win"):
+            os.startfile(str(p))  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(p)])
+        else:
+            subprocess.Popen(["xdg-open", str(p)])
+        return True, f"Opened {p}"
+    except (OSError, FileNotFoundError) as exc:
+        log.warning("open_in_explorer failed for %s: %s", p, exc)
+        return False, f"Could not open {p}: {exc}"
 
 
 def status_badge(status: str) -> str:

@@ -4,23 +4,26 @@ from __future__ import annotations
 
 import streamlit as st
 
-from common import status_badge
+from common import open_in_explorer, status_badge
 from src.library_manager import LibraryManager
 
 
 def render() -> None:
-    st.subheader("Library")
     library: LibraryManager = st.session_state.library
     cfg = st.session_state.config
 
-    cols = st.columns([3, 1, 1, 1])
+    cols = st.columns([3, 1, 1, 1, 1])
     cols[0].markdown(f"**Input directory:** `{cfg.paths.input_dir}`")
 
-    if cols[1].button("Rescan", key="lib_rescan", width="content"):
+    if cols[1].button("📂 Open input folder", key="lib_open_input", width="stretch"):
+        ok, msg = open_in_explorer(cfg.paths.input_dir)
+        (st.success if ok else st.error)(msg)
+
+    if cols[2].button("Rescan", key="lib_rescan", width="stretch"):
         st.cache_data.clear()
         st.rerun()
 
-    if cols[2].button("Open next pending", key="lib_open_next", width="content"):
+    if cols[3].button("Open next pending", key="lib_open_next", width="stretch"):
         nxt = library.next_pending()
         if nxt:
             st.session_state.current_file = nxt.filename
@@ -30,7 +33,7 @@ def render() -> None:
             st.info("No pending illustrations.")
 
     counts = library.status_counts()
-    cols[3].markdown(
+    cols[4].markdown(
         f"<div style='line-height:1.6'>"
         f"{status_badge('pending')} {counts['pending']} &nbsp;"
         f"{status_badge('in_progress')} {counts['in_progress']} &nbsp;"

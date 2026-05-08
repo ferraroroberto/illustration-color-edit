@@ -8,5 +8,17 @@
     "enabled": true,
     "dpi": 300,
     "inkscape_path": "inkscape"
+  },
+  "cmyk_export": {
+    "enabled": true,
+    "output_dir": "./output_cmyk",
+    "icc_profile_path": "./profiles/ISOcoated_v2_eci.icc",
+    "ghostscript_path": "gswin64c",
+    "target_width_inches": 5.5,
+    "target_height_inches": 5.5,
+    "bleed_inches": 0.0,
+    "pdfx_compliance": false,
+    "generate_preview_png": true,
+    "preview_dpi": 150
   }
 }

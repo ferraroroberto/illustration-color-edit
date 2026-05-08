@@ -52,20 +52,50 @@ class PathsConfig:
 
 
 @dataclass
+class CmykExportConfig:
+    """Configuration for the CMYK print export pipeline.
+
+    Lives under ``cmyk_export`` in ``config.json`` (folder paths) and is the
+    sibling of :class:`PngExportConfig` for the grayscale workflow.
+
+    The ICC profile path and Ghostscript binary are user-supplied per machine;
+    see ``docs/2026-05-07-cmyk-pipeline.md`` for sources.
+    """
+
+    enabled: bool = True
+    output_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "output_cmyk")
+    icc_profile_path: Path = field(default_factory=lambda: PROJECT_ROOT / "profiles" / "ISOcoated_v2_eci.icc")
+    ghostscript_path: str = "gswin64c"
+    target_width_inches: float = 5.5
+    target_height_inches: float = 7.5
+    bleed_inches: float = 0.0
+    pdfx_compliance: bool = False
+    generate_preview_png: bool = True
+    preview_dpi: int = 150
+
+
+@dataclass
 class AppConfig:
     """Resolved application config. Use ``load_config()`` to construct."""
 
     global_color_map: dict[str, dict[str, str]] = field(default_factory=dict)
+    cmyk_correction_map: dict[str, dict[str, str]] = field(default_factory=dict)
     matching: MatchingConfig = field(default_factory=MatchingConfig)
     print_safety: PrintSafetyConfig = field(default_factory=PrintSafetyConfig)
     png_export: PngExportConfig = field(default_factory=PngExportConfig)
+    cmyk_export: CmykExportConfig = field(default_factory=CmykExportConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
     log_level: str = "INFO"
     source_path: Optional[Path] = None
 
     def ensure_dirs(self) -> None:
-        """Create the configured input/output/metadata directories if missing."""
-        for p in (self.paths.input_dir, self.paths.output_dir, self.paths.metadata_dir):
+        """Create the configured input/output/metadata/cmyk directories if missing."""
+        for p in (
+            self.paths.input_dir,
+            self.paths.output_dir,
+            self.paths.metadata_dir,
+            self.cmyk_export.output_dir,
+        ):
             p.mkdir(parents=True, exist_ok=True)
 
 
@@ -112,6 +142,14 @@ def load_config() -> AppConfig:
     cfg.global_color_map = {
         k.upper(): v for k, v in color_raw.get("global_color_map", {}).items()
     }
+    cfg.cmyk_correction_map = {
+        k.upper(): {
+            "target": str(v.get("target", "")).upper(),
+            "label": str(v.get("label", "")),
+            "notes": str(v.get("notes", "")),
+        }
+        for k, v in color_raw.get("cmyk_correction_map", {}).items()
+    }
 
     matching = color_raw.get("matching", {})
     cfg.matching = MatchingConfig(
@@ -131,6 +169,22 @@ def load_config() -> AppConfig:
         enabled=bool(png.get("enabled", True)),
         dpi=int(png.get("dpi", 300)),
         inkscape_path=str(png.get("inkscape_path", "inkscape")),
+    )
+
+    cmyk = path_raw.get("cmyk_export", {})
+    cfg.cmyk_export = CmykExportConfig(
+        enabled=bool(cmyk.get("enabled", True)),
+        output_dir=_resolve_path(cmyk.get("output_dir", "./output_cmyk"), base),
+        icc_profile_path=_resolve_path(
+            cmyk.get("icc_profile_path", "./profiles/ISOcoated_v2_eci.icc"), base
+        ),
+        ghostscript_path=str(cmyk.get("ghostscript_path", "gswin64c")),
+        target_width_inches=float(cmyk.get("target_width_inches", 5.5)),
+        target_height_inches=float(cmyk.get("target_height_inches", 7.5)),
+        bleed_inches=float(cmyk.get("bleed_inches", 0.0)),
+        pdfx_compliance=bool(cmyk.get("pdfx_compliance", False)),
+        generate_preview_png=bool(cmyk.get("generate_preview_png", True)),
+        preview_dpi=int(cmyk.get("preview_dpi", 150)),
     )
 
     cfg.log_level = str(color_raw.get("logging", {}).get("level", "INFO")).upper()
