@@ -88,6 +88,9 @@ class FileResult:
     preview_png: Optional[Path] = None
     report_txt: Optional[Path] = None
     replacements: int = 0
+    # Per-source-hex breakdown of pre-correction replacements (source -> count).
+    # Captured so the audit report can list each #SRC → #TGT shift individually.
+    replacements_by_source: dict[str, int] = field(default_factory=dict)
     unmapped_colors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     error: Optional[str] = None
@@ -238,6 +241,8 @@ def write_conversion_report(
     height_inches: float,
     bleed_inches: float,
     replacements: int,
+    replacements_by_source: dict[str, int],
+    correction_map: dict[str, str],
     unmapped_colors: list[str],
     warnings: list[str],
     inkscape_exe: str,
@@ -263,6 +268,21 @@ def write_conversion_report(
     warnings_block = (
         "\n".join(f"  - {w}" for w in warnings) if warnings else "  (none)"
     )
+    # Per-color CMYK pre-shift table — sorted by occurrence count desc so
+    # the most-impacted colors land at the top. ``correction_map`` keys are
+    # uppercased on load; ``by_source`` keys come from the SVG so we
+    # uppercase on lookup to be safe.
+    if replacements_by_source:
+        upper_map = {k.upper(): v for k, v in correction_map.items()}
+        shift_lines = []
+        for src, count in sorted(
+            replacements_by_source.items(), key=lambda kv: (-kv[1], kv[0])
+        ):
+            tgt = upper_map.get(src.upper(), "?")
+            shift_lines.append(f"  {src} -> {tgt}  ({count} {'token' if count == 1 else 'tokens'})")
+        shifts_block = "\n".join(shift_lines)
+    else:
+        shifts_block = "  (none)"
     pdfx_def_line = (
         f"{pdfx_def_ps.name} ({_safe_size(pdfx_def_ps)})" if pdfx_def_ps else "not generated"
     )
@@ -293,7 +313,8 @@ PDF MediaBox:     {page_w:.3f} x {page_h:.3f} in
 
 Pre-correction (RGB to RGB before Ghostscript)
 ----------------------------------------------
-Replacements:     {replacements}
+Replacements:     {replacements} total
+{shifts_block}
 Unmapped colors:  {unmapped_str}
 
 SVG content warnings
@@ -366,6 +387,7 @@ def process_one(
         body, report = apply_mapping_with_report(svg_path, correction_map)
         corrected_svg.write_bytes(body)
         result.replacements = report.replacements
+        result.replacements_by_source = dict(report.by_source)
         result.unmapped_colors = sorted(report.unmapped)
 
         # 1b. Patch the SVG root with physical inches so Inkscape produces a
@@ -434,6 +456,8 @@ def process_one(
                 height_inches=ctx.height_inches,
                 bleed_inches=ctx.bleed_inches,
                 replacements=result.replacements,
+                replacements_by_source=result.replacements_by_source,
+                correction_map=correction_map,
                 unmapped_colors=result.unmapped_colors,
                 warnings=result.warnings,
                 inkscape_exe=ctx.inkscape_exe,

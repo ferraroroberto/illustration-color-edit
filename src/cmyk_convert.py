@@ -58,12 +58,17 @@ def _resolve_ghostscript(gs_exe: str) -> str:
 
 
 def get_ghostscript_version(gs_exe: str) -> str:
-    """Return the first line of ``gs -v`` (e.g. "GPL Ghostscript 10.07.0").
+    """Return a short version string (e.g. "GPL Ghostscript 10.07.0").
 
     Used in audit reports so a book editor or prepress operator can see
     exactly which Ghostscript build produced a given CMYK PDF. Returns
     ``"unknown"`` if the binary cannot be located or the call fails — the
     report stays informative without becoming a hard dependency.
+
+    Uses ``--version`` (which prints just the bare version number and
+    exits) rather than ``-v``: the latter is the verbose banner and on
+    some Windows builds of ``gswin64c`` waits on stdin for PostScript,
+    causing this probe to time out.
     """
     try:
         bin_path = _resolve_ghostscript(gs_exe)
@@ -71,12 +76,17 @@ def get_ghostscript_version(gs_exe: str) -> str:
         return "unknown"
     try:
         result = subprocess.run(
-            [bin_path, "-v"], capture_output=True, text=True, timeout=10,
+            [bin_path, "--version"], capture_output=True, text=True, timeout=10,
         )
     except (subprocess.SubprocessError, OSError):
         return "unknown"
     out = (result.stdout or result.stderr or "").strip().splitlines()
-    return out[0].strip() if out else "unknown"
+    if not out:
+        return "unknown"
+    bare = out[0].strip()
+    # ``--version`` prints just the number (e.g. "10.07.0"). Prefix it so
+    # the report line reads naturally without claiming a different product.
+    return f"GPL Ghostscript {bare}" if bare and bare[0].isdigit() else bare
 
 
 def _output_condition_for_profile(icc_profile: Path) -> tuple[str, str]:
