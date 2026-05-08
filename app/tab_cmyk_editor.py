@@ -17,6 +17,7 @@ Mirrors the grayscale Editor (``tab_editor.py``) in shape: same file picker
 
 from __future__ import annotations
 
+import base64
 import re
 
 import streamlit as st
@@ -208,7 +209,19 @@ def render() -> None:
             )
         elif cached_proof.status == "ok" and cached_proof.preview_png \
                 and cached_proof.preview_png.is_file():
-            st.image(str(cached_proof.preview_png), width="stretch")
+            _png_b64 = base64.b64encode(
+                cached_proof.preview_png.read_bytes()
+            ).decode()
+            st.markdown(
+                f'<div style="background:#fff;border:1px solid #e0e0e0;'
+                f'border-radius:6px;padding:8px;width:100%;'
+                f'aspect-ratio:{page_aspect};overflow:hidden;display:flex;'
+                f'align-items:center;justify-content:center;">'
+                f'<img src="data:image/png;base64,{_png_b64}" '
+                f'style="max-width:100%;max-height:100%;object-fit:contain;">'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
             st.caption(
                 f"OK — {cached_proof.replacements} replacements, "
                 f"{len(cached_proof.unmapped_colors)} unmapped, "
