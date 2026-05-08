@@ -54,6 +54,38 @@ def _apply_hex_input(hk: str, pk: str) -> None:
         st.session_state[pk] = normalized
 
 
+def _persistable_overrides(
+    picks: dict[str, str],
+    cmyk_global: dict[str, dict[str, str]],
+) -> dict[str, str]:
+    """Filter picks down to entries that genuinely override the global map.
+
+    A pick goes into the per-file ``cmyk_overrides`` block only when it
+    actually adds something the global ``cmyk_correction_map`` doesn't
+    already provide. Two cases get dropped:
+
+      * **Identity** — ``target == source``. No-op correction; the color
+        already passes through unchanged.
+      * **Already-global** — ``target == cmyk_correction_map[source].target``.
+        The global map already steers this color to the same place, so a
+        per-file entry is pure noise (and would later survive a
+        "Replace globally" the user expected to delete it).
+
+    Everything else is a real per-file pick the user wants kept.
+    """
+    out: dict[str, str] = {}
+    for src, tgt in picks.items():
+        src_u = src.upper()
+        tgt_u = tgt.upper()
+        if tgt_u == src_u:
+            continue
+        global_target = cmyk_global.get(src_u, {}).get("target", "").upper()
+        if tgt_u == global_target:
+            continue
+        out[src_u] = tgt_u
+    return out
+
+
 def _build_ctx(cfg) -> CmykContext:
     return CmykContext(
         output_dir=cfg.cmyk_export.output_dir,
@@ -168,8 +200,10 @@ def render() -> None:
         (st.success if ok else st.error)(msg)
     if btn_gen.button("Generate CMYK soft-proof", key=f"sp_btn_{current}",
                       type="primary", width="stretch"):
-        # Save effective picks first so the proof matches what we see.
-        illu.cmyk_overrides = {k.upper(): v.upper() for k, v in picks.items()}
+        # Save genuine per-file picks first so the proof matches what we
+        # see — but only entries that actually deviate from the global map
+        # (skip identities and picks that already match the global target).
+        illu.cmyk_overrides = _persistable_overrides(picks, cmyk_global)
         store.save_illustration(illu)
         ctx = _build_ctx(cfg)
         with st.spinner("Running Inkscape → Ghostscript pipeline…"):
@@ -267,6 +301,43 @@ def render() -> None:
                 detail = "passes through unchanged"
             row[1].markdown(f"{badge}<br><small>{detail}</small>", unsafe_allow_html=True)
 
+            # Reset: clear all corrections for this color — both the per-file
+            # override and the project-wide cmyk_correction_map entry. The
+            # color then passes straight through to ICC with no pre-correction.
+            # Shown when either source of correction exists for this color.
+            has_override = src_hex in illu.cmyk_overrides
+            has_global = src_hex in cmyk_global
+            if has_override or has_global:
+                scope = (
+                    "override + global" if has_override and has_global
+                    else "override" if has_override
+                    else "global"
+                )
+                if row[1].button(
+                    "↺ reset",
+                    key=f"cmyk_reset_{current}_{src_hex}",
+                    help=(
+                        f"Clear all corrections for this color "
+                        f"({scope}). The color will pass through to ICC "
+                        f"with no pre-correction."
+                    ),
+                ):
+                    if has_override:
+                        del illu.cmyk_overrides[src_hex]
+                        store.save_illustration(illu)
+                    if has_global:
+                        store.remove_cmyk_correction_entry(src_hex)
+                    for k in (
+                        f"cmyk_pick_{current}_{src_hex}",
+                        f"cmyk_hex_{current}_{src_hex}",
+                        f"cmyk_hist_{current}_{src_hex}",
+                    ):
+                        st.session_state.pop(k, None)
+                    saved = st.session_state.get(pick_state_key, {})
+                    saved.pop(src_hex, None)
+                    st.session_state[pick_state_key] = saved
+                    st.rerun()
+
             pick_key = f"cmyk_pick_{current}_{src_hex}"
             hex_key = f"cmyk_hex_{current}_{src_hex}"
             hist_key = f"cmyk_hist_{current}_{src_hex}"
@@ -330,14 +401,21 @@ def render() -> None:
     st.session_state[pick_state_key] = picks
 
     # ---- Save buttons ------------------------------------------------------ #
+    # Only persist picks that genuinely override the global map: not
+    # identity (``target == source``) and not already redundant with the
+    # current ``cmyk_correction_map`` entry. Saving picks that match the
+    # global is pure noise — the color renders the same either way, but a
+    # per-file override would later survive a "Replace globally" the user
+    # thought they'd cleaned up.
+    real_picks = _persistable_overrides(picks, cmyk_global)
     st.divider()
     a1, a2, a3, a4 = st.columns([1, 1, 1, 3])
     if a1.button("Save (keep status)", key="cmyk_ed_save", width="content"):
-        illu.cmyk_overrides = {k.upper(): v.upper() for k, v in picks.items()}
+        illu.cmyk_overrides = dict(real_picks)
         store.save_illustration(illu)
         st.success(f"Saved {len(illu.cmyk_overrides)} CMYK overrides for {current}.")
     if a2.button("Save & mark reviewed", key="cmyk_ed_review", width="content", type="primary"):
-        illu.cmyk_overrides = {k.upper(): v.upper() for k, v in picks.items()}
+        illu.cmyk_overrides = dict(real_picks)
         illu.with_cmyk_status("reviewed")
         store.save_illustration(illu)
         gm = store.load_cmyk_correction_map()
@@ -353,11 +431,14 @@ def render() -> None:
             "the CMYK correction map."
         )
     if a3.button("Promote ALL picks to global", key="cmyk_ed_promote", width="content"):
-        for src, tgt in picks.items():
+        for src, tgt in real_picks.items():
             store.upsert_cmyk_correction_entry(
                 src, tgt, label="manual promote", notes=""
             )
-        st.success(f"Promoted {len(picks)} entries to the CMYK correction map.")
+        st.success(
+            f"Promoted {len(real_picks)} entr"
+            f"{'y' if len(real_picks) == 1 else 'ies'} to the CMYK correction map."
+        )
 
     if report.unmapped:
         a4.info(

@@ -196,3 +196,18 @@ def test_suggest_from_history_sorts_by_count_desc():
 
 def test_suggest_from_history_empty_returns_empty():
     assert suggest_from_history("#FF0000", {}) == []
+
+
+def test_suggest_from_history_drops_identity_entries():
+    """Identity targets (target == source) are no-op corrections and
+    shouldn't pollute the history dropdown — they're not real picks."""
+    history = {
+        "#FF0000": {
+            "#FF0000": 5,   # identity — should be filtered
+            "#CC0000": 2,
+            "#FF1111": 1,
+        }
+    }
+    out = suggest_from_history("#FF0000", history)
+    assert ("#FF0000", 5) not in out
+    assert out == [("#CC0000", 2), ("#FF1111", 1)]

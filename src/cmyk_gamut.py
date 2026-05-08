@@ -90,20 +90,12 @@ def _transforms_for(icc_path_str: str, icc_mtime: float):
     return forward, backward
 
 
-def cmyk_gamut_delta(hex_color: str, icc_path: Path) -> Optional[float]:
-    """Return Lab ΔE76 of ``hex_color`` round-tripped through the ICC profile.
+def _roundtrip_rgb(
+    hex_color: str, icc_path: Path
+) -> Optional[Tuple[Tuple[int, int, int], Tuple[int, int, int]]]:
+    """Run ``hex_color`` through sRGB→CMYK→sRGB. Returns ``(rgb_in, rgb_out)``.
 
-    Returns ``None`` if the profile cannot be loaded — the caller should
-    treat that as "no warning available" rather than "no warning needed".
-
-    A larger value means the color shifts more when printed on press.
-    Useful thresholds:
-
-      * < 1   : not perceptible — color is well inside gamut
-      * 1-2   : barely perceptible
-      * 2-6   : perceptible at a glance, but acceptable for most work
-      * > 6   : noticeably different — flag the user
-      * > 10  : strongly out of gamut
+    Returns ``None`` if the profile cannot be loaded.
     """
     icc_path = Path(icc_path)
     if not icc_path.is_file():
@@ -120,4 +112,44 @@ def cmyk_gamut_delta(hex_color: str, icc_path: Path) -> Optional[float]:
     cmyk_img = ImageCms.applyTransform(src_img, forward)
     rgb_back_img = ImageCms.applyTransform(cmyk_img, backward)
     rgb_out = rgb_back_img.getpixel((0, 0))
+    return rgb_in, rgb_out
+
+
+def cmyk_gamut_delta(hex_color: str, icc_path: Path) -> Optional[float]:
+    """Return Lab ΔE76 of ``hex_color`` round-tripped through the ICC profile.
+
+    Returns ``None`` if the profile cannot be loaded — the caller should
+    treat that as "no warning available" rather than "no warning needed".
+
+    A larger value means the color shifts more when printed on press.
+    Useful thresholds:
+
+      * < 1   : not perceptible — color is well inside gamut
+      * 1-2   : barely perceptible
+      * 2-6   : perceptible at a glance, but acceptable for most work
+      * > 6   : noticeably different — flag the user
+      * > 10  : strongly out of gamut
+    """
+    rt = _roundtrip_rgb(hex_color, icc_path)
+    if rt is None:
+        return None
+    rgb_in, rgb_out = rt
     return delta_e_76(rgb_in, rgb_out)
+
+
+def cmyk_roundtrip_rgb(hex_color: str, icc_path: Path) -> Optional[str]:
+    """Return the sRGB hex of ``hex_color`` after sRGB→CMYK→sRGB through the ICC.
+
+    This is the simulated *printed appearance* of the input color on the
+    press described by the ICC profile — what the soft-proof shows back
+    when you feed it ``hex_color``. It is the visual side of the same
+    roundtrip :func:`cmyk_gamut_delta` measures: that function returns the
+    perceptual *distance*, this one returns the *destination* color.
+
+    Returns ``None`` if the profile cannot be loaded.
+    """
+    rt = _roundtrip_rgb(hex_color, icc_path)
+    if rt is None:
+        return None
+    r, g, b = rt[1]
+    return "#{:02X}{:02X}{:02X}".format(r, g, b)

@@ -178,3 +178,33 @@ def render() -> None:
             st.success(f"Saved cmyk_export to `{written}`")
         else:
             st.error("No config.json found to save into.")
+
+    st.divider()
+
+    # ---- Maintenance ------------------------------------------------------- #
+    st.markdown("### Maintenance")
+    st.caption(
+        "Older save flows occasionally wrote identity (no-op) corrections "
+        "like `#000000 → #000000` into per-file `cmyk_overrides` and the "
+        "project-wide correction map. They look like real picks in the "
+        "history dropdown but do nothing on press. Click below to strip "
+        "them all in one pass."
+    )
+    if st.button(
+        "Clean identity entries from all CMYK metadata",
+        key="cmyk_cleanup_identity",
+        width="content",
+    ):
+        store = st.session_state.store
+        report = store.cleanup_identity_entries()
+        if report["global"] == 0 and report["files"] == 0:
+            st.info("Nothing to clean — no identity entries found.")
+        else:
+            st.success(
+                f"Removed {report['global']} identity entr"
+                f"{'y' if report['global'] == 1 else 'ies'} from the "
+                f"global correction map and "
+                f"{report['files']} from "
+                f"{report['metadata_files_touched']} metadata file"
+                f"{'' if report['metadata_files_touched'] == 1 else 's'}."
+            )

@@ -139,3 +139,48 @@ def test_cmyk_usage_counts(store):
         store.save_illustration(m)
     counts = store.cmyk_usage_counts()
     assert counts == {"#000000": 1, "#FF0000": 1}
+
+
+def test_cleanup_identity_entries_strips_global_and_per_file(store):
+    # Pollute global with a real entry + an identity.
+    store.upsert_cmyk_correction_entry("#FFFFFF", "#FFFFFF", label="oops identity")
+    store.upsert_cmyk_correction_entry("#FF0000", "#EE0000", label="real")
+    a = IllustrationMapping(
+        filename="a.svg",
+        cmyk_overrides={
+            "#000000": "#000000",  # identity — should be stripped
+            "#FF0000": "#EE0000",  # real correction
+            "#888888": "#888888",  # identity
+        },
+    )
+    b = IllustrationMapping(
+        filename="b.svg",
+        cmyk_overrides={"#FF0000": "#EE0000"},  # all clean
+    )
+    for m in (a, b):
+        store.save_illustration(m)
+
+    report = store.cleanup_identity_entries()
+    assert report["global"] == 1
+    assert report["files"] == 2
+    assert report["metadata_files_touched"] == 1
+
+    # Verify state on disk.
+    gm = store.load_cmyk_correction_map()
+    assert "#FFFFFF" not in gm
+    assert "#FF0000" in gm
+
+    a_clean = store.load_illustration("a.svg")
+    assert a_clean.cmyk_overrides == {"#FF0000": "#EE0000"}
+    b_clean = store.load_illustration("b.svg")
+    assert b_clean.cmyk_overrides == {"#FF0000": "#EE0000"}
+
+
+def test_cleanup_identity_entries_noop_when_clean(store):
+    a = IllustrationMapping(
+        filename="a.svg",
+        cmyk_overrides={"#FF0000": "#EE0000"},
+    )
+    store.save_illustration(a)
+    report = store.cleanup_identity_entries()
+    assert report == {"global": 0, "files": 0, "metadata_files_touched": 0}

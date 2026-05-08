@@ -305,11 +305,18 @@ def suggest_from_history(
     in other illustrations, return ``[(target_hex, count), ...]`` sorted by
     most-used first.
 
-    ``history`` shape: ``{source_hex: {target_hex: count}}``.
+    ``history`` shape: ``{source_hex: {target_hex: count}}``. Identity
+    targets (``target == source``) are dropped — they're no-op corrections
+    that convey no useful information to the user, and may exist in legacy
+    metadata files written before the save flow filtered them out.
     """
     src = source_hex.upper()
     by_target = history.get(src, {})
     return sorted(
-        ((t.upper(), c) for t, c in by_target.items()),
+        (
+            (t.upper(), c)
+            for t, c in by_target.items()
+            if t.upper() != src
+        ),
         key=lambda kv: (-kv[1], kv[0]),
     )

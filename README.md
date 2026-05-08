@@ -45,6 +45,7 @@ illustration-color-edit/
 │   ├── tab_batch.py            # Batch Export tab (grayscale)
 │   ├── tab_cmyk_editor.py      # CMYK Editor tab (per-illustration corrections + soft-proof)
 │   ├── tab_cmyk_global_map.py  # CMYK correction map tab
+│   ├── tab_palette.py          # Palette tab (curated swatch picker + visual diff)
 │   ├── tab_cmyk_export.py      # CMYK Print Export tab (batch SVG → CMYK PDF)
 │   └── tab_settings.py         # Settings tab
 ├── src/
@@ -57,6 +58,9 @@ illustration-color-edit/
 │   ├── svg_to_pdf.py       # Inkscape wrapper: SVG → RGB PDF at trim size
 │   ├── cmyk_convert.py     # Ghostscript wrapper: RGB PDF → CMYK PDF via ICC
 │   ├── cmyk_pipeline.py    # CMYK pipeline orchestrator (single + batch + soft-proof)
+│   ├── palette.py          # curated palette: Swatch/Palette + Lab k-means seeding
+│   ├── palette_store.py    # palette.json persistence + ICC signature helper
+│   ├── cmyk_gamut.py       # ICC roundtrip helpers (gamut warning + printed-appearance preview)
 │   ├── qa_report.py        # CMYK batch HTML QA report writer
 │   └── cli.py              # batch CLI entry point (both pipelines)
 ├── tests/                      # pytest unit tests
@@ -71,6 +75,7 @@ illustration-color-edit/
 ├── config.json                 # gitignored, your local folder paths
 ├── color-config.json.example   # committed template for color + cmyk correction maps
 ├── color-config.json           # gitignored, your local color mappings
+├── palette.json                # gitignored, curated CMYK palette (auto-created by Palette tab)
 ├── .env.example
 ├── .gitignore
 ├── requirements.txt
@@ -208,8 +213,8 @@ or
 & .\.venv\Scripts\python.exe -m streamlit run app\app.py
 ```
 
-The app has eight horizontal tabs, organised as: Library | grayscale-pipeline
-trio | CMYK-pipeline trio | Settings.
+The app has nine sidebar destinations, organised as: Library | grayscale
+pipeline (4 tabs) | CMYK pipeline (4 tabs).
 
 1. **Library** — list all SVGs in `input/` with grayscale status badges
    (`pending` / `in_progress` / `reviewed` / `exported`). Click to open.
@@ -225,7 +230,16 @@ trio | CMYK-pipeline trio | Settings.
    Ghostscript pipeline once and shows the resulting PNG inline.
 6. **CMYK Global Map** — view and edit the project-wide
    `cmyk_correction_map`. Usage counts across illustrations.
-7. **CMYK Print Export** — batch CMYK: writes `<name>_CMYK.pdf` (and a
+7. **Palette** — curated CMYK swatch picker. Cluster every source color in
+   the library into a small set of swatches via Lab k-means; each swatch
+   shows its *printed appearance* (computed by an ICC roundtrip) so picks
+   are made by what the press will produce, not by RGB hex math. Edit
+   labels, see which illustrations use each member color, and "Replace
+   globally" — a single action that updates the global correction map and
+   deletes every per-file override of the swatch's members in one pass,
+   with a before / after / on-press visual diff in the confirm dialog.
+   See [`docs/2026-05-08-curated-palette.md`](docs/2026-05-08-curated-palette.md).
+8. **CMYK Print Export** — batch CMYK: writes `<name>_CMYK.pdf` (and a
    `<name>_CMYK_preview.png` soft-proof when enabled) at the configured trim
    size into `output_cmyk/`, plus an HTML QA report. When
    `cmyk_export.audit_artifacts` is on (the default), each PDF also gets a
@@ -234,8 +248,10 @@ trio | CMYK-pipeline trio | Settings.
    or prepress operator can audit per illustration. Sidecars from prior runs
    for the same stem are cleaned up on every export, so toggling the setting
    never leaves orphans.
-8. **Settings** — paths, matching threshold, print-safety threshold, PNG export
-   settings.
+9. **CMYK Settings** — paths, ICC profile, Ghostscript binary, trim/bleed,
+   PDF/X-1a, soft-proof DPI, audit-sidecars toggle. Also exposes a
+   *Maintenance → Clean identity entries from all CMYK metadata* button,
+   useful as a one-shot cleanup for files written by older save flows.
 
 ## CLI batch usage
 
@@ -296,16 +312,27 @@ color CMYK PDFs to a publisher.
    `color-config.json.example` ships a starter set of common
    gamut-safe corrections (saturated red → less saturated, pure black →
    near-black, etc.). Copy what fits your palette.
-4. **Iterate per illustration.** For each file: open the **CMYK Editor**
-   tab, eyeball the live RGB-corrected preview, click **Generate CMYK
-   soft-proof** to see the press-side result. Tweak any problem colors and
-   re-soft-proof until you like it.
-5. **Mark reviewed.** Save & mark reviewed in the CMYK Editor.
-6. **Batch export.** Run the **CMYK Print Export** tab (or
+4. **Converge on a shared palette.** Open the **Palette** tab. Click
+   *Generate* in the seed panel to cluster every color in your library
+   into a small set of swatches whose tiles show the *printed*
+   appearance via an ICC roundtrip. Pick swatches that look right on
+   press, click **Replace globally**, and confirm — the global
+   correction map gets the new entry and every per-file override of
+   the swatch's members is cleaned up in one pass. The before / after
+   / on-press visual diff in the confirm dialog shows you exactly
+   which illustrations will change before you commit.
+5. **Iterate per illustration if needed.** For finer per-file
+   adjustments: open the **CMYK Editor** tab, eyeball the live
+   RGB-corrected preview, click **Generate CMYK soft-proof** to see
+   the press-side result. The `↺ reset` button on each row clears
+   that color's per-file override AND its global correction-map entry
+   in one click — the color then passes through to ICC unchanged.
+6. **Mark reviewed.** Save & mark reviewed in the CMYK Editor.
+7. **Batch export.** Run the **CMYK Print Export** tab (or
    `python -m src.cli cmyk-convert --only-reviewed`). Output lands in
    `output_cmyk/<name>_CMYK.pdf` plus a soft-proof PNG and an HTML QA
    report.
-7. **Verify** (optional but recommended):
+8. **Verify** (optional but recommended):
    ```powershell
    gswin64c -o nul -sDEVICE=inkcov output_cmyk\<file>_CMYK.pdf
    pdfinfo output_cmyk\<file>_CMYK.pdf

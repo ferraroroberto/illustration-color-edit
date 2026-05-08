@@ -382,6 +382,46 @@ class MappingStore:
                 counts[src.upper()] = counts.get(src.upper(), 0) + 1
         return counts
 
+    # ----- maintenance ----------------------------------------------------- #
+    def cleanup_identity_entries(self) -> dict[str, int]:
+        """Strip identity (``target == source``) entries from CMYK storage.
+
+        Walks every per-file ``cmyk_overrides`` block and the project-wide
+        ``cmyk_correction_map``, removing any entry that maps a color to
+        itself. Identity entries are no-op corrections — they take up
+        space, surface as misleading suggestions in the history dropdown,
+        and pollute "Replace globally" pre-flight counts. Older save flows
+        wrote them by accident; this is the one-shot migration to clean up.
+
+        Returns ``{"global": N, "files": M, "metadata_files_touched": K}``
+        with the counts of entries removed and metadata files rewritten.
+        """
+        report = {"global": 0, "files": 0, "metadata_files_touched": 0}
+
+        # Global cmyk_correction_map.
+        gm = self.load_cmyk_correction_map()
+        cleaned_gm = {
+            k: v for k, v in gm.items()
+            if v.get("target", "").upper() != k.upper()
+        }
+        if len(cleaned_gm) != len(gm):
+            report["global"] = len(gm) - len(cleaned_gm)
+            self.save_cmyk_correction_map(cleaned_gm)
+
+        # Per-file cmyk_overrides.
+        for illu in self.all_illustrations():
+            cleaned = {
+                k: v for k, v in illu.cmyk_overrides.items()
+                if v.upper() != k.upper()
+            }
+            removed = len(illu.cmyk_overrides) - len(cleaned)
+            if removed:
+                illu.cmyk_overrides = cleaned
+                self.save_illustration(illu)
+                report["files"] += removed
+                report["metadata_files_touched"] += 1
+        return report
+
 
 # --------------------------------------------------------------------------- #
 # Convenience helpers

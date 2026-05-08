@@ -41,6 +41,7 @@ from src.mapping_store import MappingStore  # noqa: E402
 
 import tab_batch, tab_editor, tab_global_map, tab_library, tab_settings  # noqa: E402, E401
 import tab_cmyk_editor, tab_cmyk_export, tab_cmyk_global_map, tab_cmyk_settings  # noqa: E402, E401
+import tab_palette  # noqa: E402
 
 
 st.set_page_config(layout="wide", page_title="Illustration Color Edit")
@@ -79,6 +80,7 @@ _DESTINATIONS = {
     "grayscale_settings":("Settings",       tab_settings.render),
     "cmyk_editor":       ("Editor",         tab_cmyk_editor.render),
     "cmyk_global":       ("Global Map",     tab_cmyk_global_map.render),
+    "cmyk_palette":      ("Palette",        tab_palette.render),
     "cmyk_export":       ("Print Export",   tab_cmyk_export.render),
     "cmyk_settings":     ("Settings",       tab_cmyk_settings.render),
 }
@@ -87,7 +89,7 @@ _GROUPS: list[tuple[str, list[str]]] = [
     ("Library",   ["library"]),
     ("Grayscale", ["grayscale_editor", "grayscale_global",
                    "grayscale_batch", "grayscale_settings"]),
-    ("CMYK",      ["cmyk_editor", "cmyk_global",
+    ("CMYK",      ["cmyk_editor", "cmyk_global", "cmyk_palette",
                    "cmyk_export", "cmyk_settings"]),
 ]
 
