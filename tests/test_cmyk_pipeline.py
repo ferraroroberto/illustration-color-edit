@@ -351,3 +351,58 @@ def test_soft_proof_writes_into_scratch_dir(sample_svg, ctx):
     assert r.output_pdf is not None
     # Soft-proof must not write into the user's main output_dir.
     assert "softproof" in str(r.output_pdf)
+    # Soft-proofs are throwaway — no audit report ever.
+    assert r.report_txt is None
+
+
+# --------------------------------------------------------------------------- #
+# Audit sidecars
+# --------------------------------------------------------------------------- #
+def test_audit_artifacts_on_writes_report(sample_svg, ctx):
+    """With audit_artifacts=True the pipeline writes a per-file report."""
+    ctx.audit_artifacts = True
+    ctx.ghostscript_version = "GPL Ghostscript 10.07.0 (test)"
+    with patch("src.cmyk_pipeline.svg_to_pdf", side_effect=_fake_inkscape), \
+         patch("src.cmyk_pipeline.rgb_pdf_to_cmyk", side_effect=_fake_gs_convert):
+        r = process_one(sample_svg, {}, ctx)
+    assert r.status == "ok"
+    assert r.report_txt is not None and r.report_txt.is_file()
+    body = r.report_txt.read_text(encoding="utf-8")
+    # Spot-check that the editor-facing values land in the report.
+    assert "CMYK conversion report" in body
+    assert "GPL Ghostscript 10.07.0 (test)" in body
+    assert "ICC profile:" in body
+    assert "Page geometry" in body
+    assert "Ghostscript command" in body
+    # Report sits next to the PDF with the matching stem.
+    assert r.report_txt.name == r.output_pdf.with_suffix("").name + "_report.txt"
+
+
+def test_audit_artifacts_off_skips_report(sample_svg, ctx):
+    """With audit_artifacts=False the pipeline writes only the PDF."""
+    ctx.audit_artifacts = False
+    with patch("src.cmyk_pipeline.svg_to_pdf", side_effect=_fake_inkscape), \
+         patch("src.cmyk_pipeline.rgb_pdf_to_cmyk", side_effect=_fake_gs_convert):
+        r = process_one(sample_svg, {}, ctx)
+    assert r.status == "ok"
+    assert r.report_txt is None
+    expected = ctx.output_dir / f"{sample_svg.stem}_CMYK_report.txt"
+    assert not expected.is_file()
+
+
+def test_audit_artifacts_off_purges_prior_sidecars(sample_svg, ctx):
+    """A re-run with audit off must remove leftover sidecars from a prior run."""
+    ctx.audit_artifacts = False
+    ctx.output_dir.mkdir(parents=True, exist_ok=True)
+    stale_report = ctx.output_dir / f"{sample_svg.stem}_CMYK_report.txt"
+    stale_def = ctx.output_dir / f"{sample_svg.stem}_CMYK.pdfx_def.ps"
+    stale_report.write_text("from a previous run")
+    stale_def.write_text("%! stale ps")
+
+    with patch("src.cmyk_pipeline.svg_to_pdf", side_effect=_fake_inkscape), \
+         patch("src.cmyk_pipeline.rgb_pdf_to_cmyk", side_effect=_fake_gs_convert):
+        r = process_one(sample_svg, {}, ctx)
+
+    assert r.status == "ok"
+    assert not stale_report.exists()
+    assert not stale_def.exists()

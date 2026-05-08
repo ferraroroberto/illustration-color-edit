@@ -225,6 +225,34 @@ The CMYK pipeline mirrors the grayscale pipeline structurally:
 The same SVG can be `reviewed` for grayscale and `pending` for CMYK. The
 two pipelines never write to each other's fields.
 
+## Audit sidecars (per-file report + PDF/X def file)
+
+The pipeline can drop two companion files next to each `<name>_CMYK.pdf` so
+a book editor or prepress operator can see exactly how a given illustration
+was produced:
+
+* `<name>_CMYK_report.txt` — plain UTF-8 text. Records the ICC profile (path,
+  size, OutputCondition), Ghostscript version + resolved binary path, the
+  full GS command that ran, page geometry (trim/bleed/MediaBox), the count
+  of RGB→RGB color replacements applied during pre-correction, any unmapped
+  colors, SVG content warnings (embedded raster `<image>` / un-outlined
+  `<text>`), and elapsed time.
+* `<name>_CMYK.pdfx_def.ps` — only when `pdfx_compliance` is on. The
+  PostScript definition file Ghostscript runs *before* `pdfwrite` to inject
+  the OutputIntent / `/GTS_PDFXVersion` markers into the catalog. It's
+  required during conversion either way; this setting just controls whether
+  it's kept on disk afterwards.
+
+Controlled by **`cmyk_export.audit_artifacts`** in `config.json` (default
+`true`). Editable from the CMYK Settings tab. When `false`, only the final
+PDF (and the optional `_preview.png`) survive — and on every run any prior
+sidecars for the same stem are removed first, so toggling the setting
+between runs never leaves orphans behind.
+
+The Ghostscript version is probed once per batch (`gs -v`) and reused for
+every per-file report. Soft-proofs from the CMYK Editor never write a
+report — they're scratch previews.
+
 ## Future work (deferred for v1)
 
 * **Explicit DeviceCMYK overrides** via PDF post-processing. Would let a

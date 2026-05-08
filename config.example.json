@@ -19,6 +19,7 @@
     "bleed_inches": 0.0,
     "pdfx_compliance": false,
     "generate_preview_png": true,
-    "preview_dpi": 150
+    "preview_dpi": 150,
+    "audit_artifacts": true
   }
 }

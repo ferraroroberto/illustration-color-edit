@@ -72,6 +72,15 @@ class CmykExportConfig:
     pdfx_compliance: bool = False
     generate_preview_png: bool = True
     preview_dpi: int = 150
+    audit_artifacts: bool = True
+    """Keep human-inspectable companion files next to each CMYK PDF.
+
+    When True, the pipeline writes ``<stem>_CMYK_report.txt`` (and, in PDF/X
+    mode, retains ``<stem>_CMYK.pdfx_def.ps``) so a book editor or prepress
+    operator can audit how each file was produced. When False, only the PDF
+    (and optional preview PNG) survive — any prior-run sidecars for the same
+    stem are removed on re-export.
+    """
 
 
 @dataclass
@@ -185,6 +194,7 @@ def load_config() -> AppConfig:
         pdfx_compliance=bool(cmyk.get("pdfx_compliance", False)),
         generate_preview_png=bool(cmyk.get("generate_preview_png", True)),
         preview_dpi=int(cmyk.get("preview_dpi", 150)),
+        audit_artifacts=bool(cmyk.get("audit_artifacts", True)),
     )
 
     cfg.log_level = str(color_raw.get("logging", {}).get("level", "INFO")).upper()

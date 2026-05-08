@@ -85,6 +85,7 @@ def render() -> None:
             pdfx=ce.pdfx_compliance,
             generate_preview=ce.generate_preview_png,
             preview_dpi=ce.preview_dpi,
+            audit_artifacts=ce.audit_artifacts,
         )
 
         # Build per-file mapping list. Each illustration gets its own merge

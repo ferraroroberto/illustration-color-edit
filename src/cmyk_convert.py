@@ -57,6 +57,28 @@ def _resolve_ghostscript(gs_exe: str) -> str:
     )
 
 
+def get_ghostscript_version(gs_exe: str) -> str:
+    """Return the first line of ``gs -v`` (e.g. "GPL Ghostscript 10.07.0").
+
+    Used in audit reports so a book editor or prepress operator can see
+    exactly which Ghostscript build produced a given CMYK PDF. Returns
+    ``"unknown"`` if the binary cannot be located or the call fails — the
+    report stays informative without becoming a hard dependency.
+    """
+    try:
+        bin_path = _resolve_ghostscript(gs_exe)
+    except GhostscriptNotFoundError:
+        return "unknown"
+    try:
+        result = subprocess.run(
+            [bin_path, "-v"], capture_output=True, text=True, timeout=10,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return "unknown"
+    out = (result.stdout or result.stderr or "").strip().splitlines()
+    return out[0].strip() if out else "unknown"
+
+
 def _output_condition_for_profile(icc_profile: Path) -> tuple[str, str]:
     """Return (OutputConditionIdentifier, OutputCondition) for a known ICC profile.
 
@@ -208,6 +230,7 @@ def rgb_pdf_to_cmyk(
     icc_profile: Path,
     gs_exe: str = "gswin64c",
     pdfx: bool = False,
+    keep_pdfx_def_ps: bool = True,
 ) -> Path:
     """Convert an RGB PDF to a CMYK PDF using the given ICC profile.
 
@@ -216,6 +239,11 @@ def rgb_pdf_to_cmyk(
     :param icc_profile: path to the target CMYK ICC profile.
     :param gs_exe: Ghostscript binary path or name on PATH.
     :param pdfx: when True, emit PDF/X-1a:2003 (publisher-friendly).
+    :param keep_pdfx_def_ps: when True (default) the PostScript definition
+        file used to inject the OutputIntent is left next to the output PDF
+        for inspection. When False it is deleted after a successful run; it
+        is still required *during* conversion so the PDF/X markers reach the
+        catalog.
     :returns: ``output_pdf``.
     :raises GhostscriptNotFoundError: if gs is not available.
     :raises IccProfileNotFoundError: if the ICC profile is missing.
@@ -265,6 +293,11 @@ def rgb_pdf_to_cmyk(
             f"Ghostscript returned 0 but {output_pdf} was not produced. "
             f"stderr={result.stderr.strip()!r}"
         )
+    if pdfx_def_ps is not None and not keep_pdfx_def_ps:
+        # The def file was a required input to GS but the caller doesn't want
+        # it kept around as a sidecar. missing_ok guards against odd cases
+        # where GS itself removed it.
+        pdfx_def_ps.unlink(missing_ok=True)
     return output_pdf
 
 

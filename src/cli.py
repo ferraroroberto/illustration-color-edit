@@ -369,6 +369,7 @@ def cmd_cmyk_convert(args: argparse.Namespace, cfg: AppConfig) -> int:
         pdfx=cfg.cmyk_export.pdfx_compliance,
         generate_preview=cfg.cmyk_export.generate_preview_png,
         preview_dpi=cfg.cmyk_export.preview_dpi,
+        audit_artifacts=cfg.cmyk_export.audit_artifacts,
     )
 
     if args.dry_run:

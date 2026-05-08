@@ -33,6 +33,10 @@ from .cmyk_convert import (
     CmykConvertError,
     GhostscriptNotFoundError,
     IccProfileNotFoundError,
+    _output_condition_for_profile,
+    _resolve_ghostscript,
+    build_gs_command,
+    get_ghostscript_version,
     pdf_to_preview_png,
     rgb_pdf_to_cmyk,
 )
@@ -64,7 +68,11 @@ class CmykContext:
     pdfx: bool = False
     generate_preview: bool = True
     preview_dpi: int = 150
+    audit_artifacts: bool = True
     tmp_dir: Optional[Path] = None  # defaults to output_dir / "_tmp"
+    # Cached at batch start so each file's report can record it without
+    # spawning N extra `gs -v` subprocesses. Empty string = not yet probed.
+    ghostscript_version: str = ""
 
     def resolved_tmp_dir(self) -> Path:
         return self.tmp_dir or (self.output_dir / "_tmp")
@@ -78,6 +86,7 @@ class FileResult:
     status: str  # "ok" | "error"
     output_pdf: Optional[Path] = None
     preview_png: Optional[Path] = None
+    report_txt: Optional[Path] = None
     replacements: int = 0
     unmapped_colors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -180,6 +189,148 @@ def detect_svg_warnings(svg_path: Path) -> list[str]:
 
 
 # --------------------------------------------------------------------------- #
+# Audit sidecars (orphan cleanup + per-file report)
+# --------------------------------------------------------------------------- #
+def _sidecar_paths(cmyk_pdf: Path) -> tuple[Path, Path]:
+    """Return (pdfx_def_ps, report_txt) for a given output PDF."""
+    return (
+        cmyk_pdf.with_suffix(".pdfx_def.ps"),
+        cmyk_pdf.parent / f"{cmyk_pdf.stem}_report.txt",
+    )
+
+
+def _purge_prior_sidecars(cmyk_pdf: Path) -> None:
+    """Remove leftover audit files for this output stem before a fresh run.
+
+    Keeps the output folder consistent with the *current* settings: if the
+    user previously exported with ``audit_artifacts`` on and now turns it
+    off, the next run sweeps away the obsolete companions instead of
+    leaving them as orphans.
+    """
+    for path in _sidecar_paths(cmyk_pdf):
+        path.unlink(missing_ok=True)
+
+
+def _format_bytes(n: int) -> str:
+    if n >= 1_048_576:
+        return f"{n/1_048_576:.2f} MB"
+    if n >= 1024:
+        return f"{n/1024:.1f} KB"
+    return f"{n} B"
+
+
+def _safe_size(path: Optional[Path]) -> str:
+    if path is None or not path.is_file():
+        return "—"
+    return _format_bytes(path.stat().st_size)
+
+
+def write_conversion_report(
+    *,
+    report_path: Path,
+    svg_path: Path,
+    cmyk_pdf: Path,
+    preview_png: Optional[Path],
+    pdfx_def_ps: Optional[Path],
+    icc_profile: Path,
+    pdfx: bool,
+    width_inches: float,
+    height_inches: float,
+    bleed_inches: float,
+    replacements: int,
+    unmapped_colors: list[str],
+    warnings: list[str],
+    inkscape_exe: str,
+    gs_resolved_path: str,
+    gs_version: str,
+    gs_command: list[str],
+    elapsed_seconds: float,
+    started_iso: str,
+) -> Path:
+    """Write a human-readable audit report for one CMYK conversion.
+
+    Intended for the book editor / prepress operator: every value is the
+    actual one used by Ghostscript and Inkscape on this run, not a copy of
+    the configuration. If the editor needs to reproduce the file from
+    scratch, the embedded ICC, OutputCondition, page geometry and the full
+    GS command line give them everything they need.
+    """
+    cond_id, cond_label = _output_condition_for_profile(icc_profile)
+    page_w = width_inches + 2 * bleed_inches
+    page_h = height_inches + 2 * bleed_inches
+    pdfx_label = "PDF/X-1a:2003" if pdfx else "plain DeviceCMYK"
+    unmapped_str = ", ".join(unmapped_colors) if unmapped_colors else "(none)"
+    warnings_block = (
+        "\n".join(f"  - {w}" for w in warnings) if warnings else "  (none)"
+    )
+    pdfx_def_line = (
+        f"{pdfx_def_ps.name} ({_safe_size(pdfx_def_ps)})" if pdfx_def_ps else "not generated"
+    )
+    preview_line = (
+        f"{preview_png.name} ({_safe_size(preview_png)})" if preview_png else "not generated"
+    )
+
+    body = f"""CMYK conversion report
+======================
+Generated:        {started_iso}
+Source SVG:       {svg_path.name} ({_safe_size(svg_path)})
+Output PDF:       {cmyk_pdf.name} ({_safe_size(cmyk_pdf)})
+Soft-proof PNG:   {preview_line}
+PDF/X def file:   {pdfx_def_line}
+
+Color management
+----------------
+ICC profile:      {icc_profile.name} ({_safe_size(icc_profile)})
+Profile path:     {icc_profile}
+Output condition: {cond_id} — {cond_label}
+PDF/X compliance: {pdfx_label}
+
+Page geometry
+-------------
+Trim:             {width_inches:.3f} x {height_inches:.3f} in
+Bleed:            {bleed_inches:.3f} in (each side)
+PDF MediaBox:     {page_w:.3f} x {page_h:.3f} in
+
+Pre-correction (RGB to RGB before Ghostscript)
+----------------------------------------------
+Replacements:     {replacements}
+Unmapped colors:  {unmapped_str}
+
+SVG content warnings
+--------------------
+{warnings_block}
+
+Tooling
+-------
+Ghostscript:      {gs_version}
+Ghostscript path: {gs_resolved_path}
+Inkscape path:    {inkscape_exe}
+Elapsed:          {elapsed_seconds:.3f} s
+
+Ghostscript command
+-------------------
+{_format_command(gs_command)}
+"""
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(body, encoding="utf-8")
+    return report_path
+
+
+def _format_command(cmd: list[str]) -> str:
+    """Format an argv list for human inspection: one arg per line, quoted if needed."""
+    lines = []
+    for i, arg in enumerate(cmd):
+        # Quote arguments that contain whitespace so the editor can copy a
+        # line into a shell. Internal quotes are doubled (PowerShell style)
+        # rather than backslash-escaped because the user is on Windows.
+        needs_quote = any(c.isspace() for c in arg)
+        rendered = f'"{arg}"' if needs_quote else arg
+        prefix = "  " if i > 0 else ""
+        lines.append(f"{prefix}{rendered}")
+    return " \\\n".join(lines)
+
+
+# --------------------------------------------------------------------------- #
 # Single-file conversion
 # --------------------------------------------------------------------------- #
 def process_one(
@@ -188,8 +339,11 @@ def process_one(
     ctx: CmykContext,
 ) -> FileResult:
     """Run the three-stage pipeline for one SVG. Never raises — errors land on the result."""
+    from datetime import datetime, timezone
+
     svg_path = Path(svg_path)
     started = time.time()
+    started_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
     stem = svg_path.stem
     result = FileResult(filename=svg_path.name, status="ok")
 
@@ -197,6 +351,12 @@ def process_one(
         ctx.output_dir.mkdir(parents=True, exist_ok=True)
         tmp = ctx.resolved_tmp_dir()
         tmp.mkdir(parents=True, exist_ok=True)
+
+        # Sweep any audit sidecars left from a previous export of this stem.
+        # Done up front so a re-run that disables audit_artifacts (or fails
+        # before the report stage) leaves no orphans behind.
+        cmyk_pdf = ctx.output_dir / f"{stem}_CMYK.pdf"
+        _purge_prior_sidecars(cmyk_pdf)
 
         result.warnings = detect_svg_warnings(svg_path)
 
@@ -226,12 +386,12 @@ def process_one(
         )
 
         # 3. RGB PDF → CMYK PDF.
-        cmyk_pdf = ctx.output_dir / f"{stem}_CMYK.pdf"
         rgb_pdf_to_cmyk(
             rgb_pdf, cmyk_pdf,
             icc_profile=ctx.icc_profile,
             gs_exe=ctx.ghostscript_exe,
             pdfx=ctx.pdfx,
+            keep_pdfx_def_ps=ctx.audit_artifacts,
         )
         result.output_pdf = cmyk_pdf
 
@@ -248,6 +408,42 @@ def process_one(
                 result.preview_png = preview
             except CmykConvertError as exc:
                 result.warnings.append(f"preview PNG failed: {exc}")
+
+        # 5. Optional audit report. Written last so it can record the final
+        #    sizes (including the soft-proof PNG, if any).
+        if ctx.audit_artifacts:
+            pdfx_def_ps, report_path = _sidecar_paths(cmyk_pdf)
+            try:
+                gs_resolved = _resolve_ghostscript(ctx.ghostscript_exe)
+            except GhostscriptNotFoundError:
+                gs_resolved = ctx.ghostscript_exe
+            gs_command = build_gs_command(
+                rgb_pdf, cmyk_pdf, ctx.icc_profile, gs_resolved,
+                pdfx=ctx.pdfx,
+                pdfx_def_ps=pdfx_def_ps if ctx.pdfx else None,
+            )
+            write_conversion_report(
+                report_path=report_path,
+                svg_path=svg_path,
+                cmyk_pdf=cmyk_pdf,
+                preview_png=result.preview_png,
+                pdfx_def_ps=pdfx_def_ps if (ctx.pdfx and pdfx_def_ps.is_file()) else None,
+                icc_profile=ctx.icc_profile,
+                pdfx=ctx.pdfx,
+                width_inches=ctx.width_inches,
+                height_inches=ctx.height_inches,
+                bleed_inches=ctx.bleed_inches,
+                replacements=result.replacements,
+                unmapped_colors=result.unmapped_colors,
+                warnings=result.warnings,
+                inkscape_exe=ctx.inkscape_exe,
+                gs_resolved_path=gs_resolved,
+                gs_version=ctx.ghostscript_version or "unknown",
+                gs_command=gs_command,
+                elapsed_seconds=round(time.time() - started, 3),
+                started_iso=started_iso,
+            )
+            result.report_txt = report_path
 
     except (
         FileNotFoundError,
@@ -297,7 +493,10 @@ def soft_proof_one(
         pdfx=False,  # soft-proof never enforces PDF/X
         generate_preview=True,
         preview_dpi=ctx.preview_dpi,
+        # Soft-proofs are throwaway previews — no audit sidecars.
+        audit_artifacts=False,
         tmp_dir=scratch / "_tmp",
+        ghostscript_version=ctx.ghostscript_version,
     )
     return process_one(svg_path, correction_map, proof_ctx)
 
@@ -315,6 +514,10 @@ def process_batch(
     from datetime import datetime, timezone
 
     started = time.time()
+    # Probe Ghostscript once for the whole batch so each per-file report can
+    # cite the version without spawning N extra subprocesses.
+    if not ctx.ghostscript_version:
+        ctx.ghostscript_version = get_ghostscript_version(ctx.ghostscript_exe)
     report = BatchReport(
         started_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         icc_profile=str(ctx.icc_profile),

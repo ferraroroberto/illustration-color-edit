@@ -43,6 +43,7 @@ def _persist_settings(cfg) -> Path | None:
         "pdfx_compliance": cfg.cmyk_export.pdfx_compliance,
         "generate_preview_png": cfg.cmyk_export.generate_preview_png,
         "preview_dpi": cfg.cmyk_export.preview_dpi,
+        "audit_artifacts": cfg.cmyk_export.audit_artifacts,
     }
     cfg_path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
     return cfg_path
@@ -101,7 +102,8 @@ def render() -> None:
         st.markdown(
             f"Spec: **{pdfx_label}**  \n"
             f"Soft-proof PNG: **{'on' if ce.generate_preview_png else 'off'}** "
-            f"@ {ce.preview_dpi} dpi"
+            f"@ {ce.preview_dpi} dpi  \n"
+            f"Audit sidecars: **{'full suite' if ce.audit_artifacts else 'PDF only'}**"
         )
 
         st.markdown("**Output directory**")
@@ -156,6 +158,18 @@ def render() -> None:
     ce.preview_dpi = d3.number_input(
         "Preview DPI", min_value=72, max_value=600,
         value=int(ce.preview_dpi), step=24, key="cmyk_settings_dpi",
+    )
+    ce.audit_artifacts = st.checkbox(
+        "Write audit sidecars (per-file report + retain PDF/X def file)",
+        value=ce.audit_artifacts, key="cmyk_settings_audit",
+        help=(
+            "When on, each export drops a `<name>_CMYK_report.txt` next to "
+            "the PDF describing the ICC profile, page geometry, color "
+            "replacements, and the exact Ghostscript command used — handy "
+            "for the book editor or prepress operator. In PDF/X mode the "
+            "`.pdfx_def.ps` file is also kept. Turn off for a clean output "
+            "folder containing only the final PDFs (and preview PNGs)."
+        ),
     )
     if st.button("Save settings to config.json", key="cmyk_save_settings",
                  type="primary", width="content"):

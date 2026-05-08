@@ -157,7 +157,8 @@ root) or absolute.
     "bleed_inches": 0.0,                                    // bleed on all sides
     "pdfx_compliance": false,                               // PDF/X-1a:2003 (forbids transparency)
     "generate_preview_png": true,                           // soft-proof PNG per file
-    "preview_dpi": 150                                      // soft-proof resolution
+    "preview_dpi": 150,                                     // soft-proof resolution
+    "audit_artifacts": true                                 // write `<name>_CMYK_report.txt` (and keep `.pdfx_def.ps`) per file
   }
 }
 ```
@@ -226,7 +227,13 @@ trio | CMYK-pipeline trio | Settings.
    `cmyk_correction_map`. Usage counts across illustrations.
 7. **CMYK Print Export** — batch CMYK: writes `<name>_CMYK.pdf` (and a
    `<name>_CMYK_preview.png` soft-proof when enabled) at the configured trim
-   size into `output_cmyk/`, plus an HTML QA report.
+   size into `output_cmyk/`, plus an HTML QA report. When
+   `cmyk_export.audit_artifacts` is on (the default), each PDF also gets a
+   `<name>_CMYK_report.txt` describing the ICC profile, page geometry, color
+   replacements, and exact Ghostscript command — a paper trail the book editor
+   or prepress operator can audit per illustration. Sidecars from prior runs
+   for the same stem are cleaned up on every export, so toggling the setting
+   never leaves orphans.
 8. **Settings** — paths, matching threshold, print-safety threshold, PNG export
    settings.
 

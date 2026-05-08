@@ -66,6 +66,7 @@ def _build_ctx(cfg) -> CmykContext:
         pdfx=cfg.cmyk_export.pdfx_compliance,
         generate_preview=True,
         preview_dpi=cfg.cmyk_export.preview_dpi,
+        audit_artifacts=cfg.cmyk_export.audit_artifacts,
     )
 
 
