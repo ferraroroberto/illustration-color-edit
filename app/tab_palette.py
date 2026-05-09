@@ -541,6 +541,7 @@ def _render_palette_grid(palette: Palette, *, key: str) -> None:
         tickmode="array",
         tickvals=list(range(len(HUE_FAMILIES))),
         ticktext=[f.capitalize() for f in HUE_FAMILIES],
+        tickfont=dict(color="#222", size=13),
         autorange="reversed",
         showgrid=False,
         zeroline=False,
@@ -550,6 +551,7 @@ def _render_palette_grid(palette: Palette, *, key: str) -> None:
         margin=dict(l=80, r=12, t=12, b=12),
         plot_bgcolor="#fafafa",
         paper_bgcolor="#fafafa",
+        font=dict(color="#222"),
         showlegend=False,
         dragmode=False,
     )
