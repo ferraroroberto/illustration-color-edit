@@ -31,10 +31,13 @@ from common import (
     status_badge,
 )
 from src.color_mapper import ColorMapper, MatchKind, suggest_from_history
+from common import load_semantic_palette
 from src.cmyk_gamut import cmyk_gamut_delta
 from src.cmyk_pipeline import CmykContext, soft_proof_one
 from src.library_manager import LibraryManager
-from src.mapping_store import MappingStore, merge_mappings
+from src.mapping_store import MappingStore
+from src.semantic_palette import merge_with_semantic
+from src.svg_parser import parse_svg
 from src.svg_writer import apply_mapping_with_report
 
 # Lab ΔE76 above this is "noticeably different at a glance" — the user
@@ -129,6 +132,28 @@ def render() -> None:
         st.warning("No concrete colors found in this SVG.")
         return
 
+    # Surface non-sRGB color-space hints — the CMYK pipeline assumes
+    # sRGB input, so anything else is worth a heads-up before the
+    # soft-proof.
+    for w in parse_svg(svg_path).color_space_warnings:
+        st.warning(f"Color-space hint: {w}")
+
+    new_auto_fix = st.checkbox(
+        "Apply auto-fixes for this file (TAC + force-K)",
+        value=illu.cmyk_auto_fix,
+        key=f"cmyk_auto_fix_{current}",
+        help=(
+            "Adds Ghostscript's `-dBlackText -dBlackVector` flags so exact-"
+            "black text and vectors land on the K plate (avoids "
+            "misregistration fringing). The TAC and fine-line *checks* "
+            "always run; this toggle controls whether the pipeline applies "
+            "the corresponding force-K fix to this file."
+        ),
+    )
+    if new_auto_fix != illu.cmyk_auto_fix:
+        illu.cmyk_auto_fix = new_auto_fix
+        store.save_illustration(illu)
+
     cmyk_global = store.load_cmyk_correction_map()
     mapper = ColorMapper(global_map=cmyk_global, matching=cfg.matching).with_overrides(
         illu.cmyk_overrides
@@ -157,7 +182,9 @@ def render() -> None:
         elif sug.target is not None:
             effective[src] = sug.target
 
-    full_mapping = merge_mappings(cmyk_global, effective)
+    full_mapping = merge_with_semantic(
+        cmyk_global, effective, load_semantic_palette(), "cmyk",
+    )
     converted_bytes, report = apply_mapping_with_report(svg_path, full_mapping)
 
     # ---- Three-column preview row (Original | RGB-corrected | Soft-proof) -- #

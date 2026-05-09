@@ -32,6 +32,50 @@ ordering. This app lets you:
 4. Preview side-by-side before committing.
 5. Batch-export the whole `input/` folder when mappings are final.
 
+## Print theory cheatsheet
+
+The CMYK pipeline plus the Accessibility tab make several press-side checks
+that aren't obvious if you've only worked in RGB. A quick map from
+prepress vocabulary to what this tool does:
+
+- **ICC profile.** A vendor-supplied 3D lookup that converts colors between
+  spaces (here: sRGB → CMYK → sRGB). Soft-proofs and gamut math both ride on
+  this. Pick the profile your printer specifies; default to **ISO Coated v2
+  (ECI)** for EU coated stock, **U.S. Web Coated SWOP v2** for North American
+  coated.
+- **CIE ΔE76.** Lab-space distance between two colors. ΔE < 1 imperceptible,
+  2–5 visible if you look, > 5 obviously different. The Palette tab shows
+  ΔE per swatch (source vs. printed appearance) and the Accessibility tab
+  uses it to detect color-blindness pair collapse.
+- **Total Area Coverage (TAC).** The per-pixel sum of CMYK ink, in percent
+  (0–400). Coated stock typically caps at 300–340%; uncoated at 240–280%;
+  newsprint at ~220%. Files that exceed the limit get rejected by prepress.
+  This tool measures `max / mean / p99 / violation%` per CMYK PDF.
+- **Force-K (100% K only).** Thin near-black lines and small near-black text
+  should print on the K plate alone. Rendered as four-color black, they pick
+  up colored fringing from press misregistration. Detection always runs;
+  per-file `cmyk_auto_fix` enables Ghostscript's `-dBlackText -dBlackVector`
+  fix.
+- **Trim / bleed / safety.** Concentric rectangles. Trim is the cut line.
+  Bleed is *outside* trim (3–5 mm); art that should reach the page edge must
+  extend to here. Safety is *inside* trim (4–5 mm); critical content stays
+  inside. The soft-proof draws all three.
+- **PDF/X-1a:2003.** A stricter PDF spec publishers prefer (or require). It
+  forbids transparency and embeds the OutputIntent (i.e. the ICC profile)
+  inside the PDF so the printer's RIP can't pick the wrong one.
+- **Color-blindness simulation (Machado 2009).** Linear-RGB matrix
+  transforms parameterized by severity (0–1) for the three common cone
+  deficiencies. Achromat is BT.709 luma. Used to flag illustrations whose
+  semantic ordering (red=bad / green=good) collapses for ~8% of male
+  readers.
+- **Semantic palette.** A layer above hex mappings: bind authored colors
+  to named slots (`status.bad`, `status.good`, …) and slots to per-pipeline
+  targets within a theme. Re-skinning for a different publisher = swap
+  themes, no per-illustration touching.
+
+For the *why* behind each check, see
+[`docs/2026-05-09-publisher-grade-additions.md`](docs/2026-05-09-publisher-grade-additions.md).
+
 ## Project structure
 
 ```
@@ -40,29 +84,39 @@ illustration-color-edit/
 │   ├── app.py                  # Streamlit entry point (scaffolding + tab routing)
 │   ├── common.py               # shared Streamlit helpers (swatches, badges, caching)
 │   ├── tab_library.py          # Library tab
+│   ├── tab_semantic_palette.py # Semantic Palette tab (slots + themes)
+│   ├── tab_accessibility.py    # Accessibility tab (color-blind simulation + risk)
 │   ├── tab_editor.py           # Editor tab (grayscale)
 │   ├── tab_global_map.py       # Global Map tab (grayscale)
 │   ├── tab_batch.py            # Batch Export tab (grayscale)
-│   ├── tab_cmyk_editor.py      # CMYK Editor tab (per-illustration corrections + soft-proof)
+│   ├── tab_cmyk_editor.py      # CMYK Editor tab (per-file + auto-fix toggle + soft-proof)
 │   ├── tab_cmyk_global_map.py  # CMYK correction map tab
-│   ├── tab_palette.py          # Palette tab (curated swatch picker + visual diff)
-│   ├── tab_cmyk_export.py      # CMYK Print Export tab (batch SVG → CMYK PDF)
+│   ├── tab_palette.py          # Palette tab (curated swatch picker + ΔE + visual diff)
+│   ├── tab_cmyk_export.py      # CMYK Print Export tab (batch + delivery snapshot button)
+│   ├── tab_cmyk_settings.py    # CMYK Settings tab (TAC, force-K, guides, template…)
 │   └── tab_settings.py         # Settings tab
 ├── src/
-│   ├── svg_parser.py       # extract colors, parse <style> blocks, normalize
+│   ├── svg_parser.py       # extract colors, parse <style> blocks, sRGB sanity check
 │   ├── color_mapper.py     # exact + nearest-color matching, suggestion engine
 │   ├── svg_writer.py       # apply mappings, write output SVG
 │   ├── library_manager.py  # scan input dir, track per-file status
 │   ├── mapping_store.py    # global + per-illustration mapping persistence (both pipelines)
+│   ├── semantic_palette.py # named slots + themes layered over hex mappings
 │   ├── print_safety.py     # gray-value warnings for uncoated paper
 │   ├── svg_to_pdf.py       # Inkscape wrapper: SVG → RGB PDF at trim size
 │   ├── cmyk_convert.py     # Ghostscript wrapper: RGB PDF → CMYK PDF via ICC
 │   ├── cmyk_pipeline.py    # CMYK pipeline orchestrator (single + batch + soft-proof)
+│   ├── cmyk_tac.py         # Total Area Coverage check (max/mean/p99 per page)
+│   ├── force_k.py          # fine-line + small-text detector for K-plate forcing
+│   ├── bleed_overlay.py    # composite trim/bleed/safety guides on soft-proof PNGs
+│   ├── filename_template.py# parse <chapter>.<figure> + apply output naming template
+│   ├── colorblind.py       # Machado-2009 simulation + risk assessment
 │   ├── palette.py          # curated palette: Swatch/Palette + Lab k-means seeding
 │   ├── palette_store.py    # palette.json persistence + ICC signature helper
 │   ├── cmyk_gamut.py       # ICC roundtrip helpers (gamut warning + printed-appearance preview)
-│   ├── qa_report.py        # CMYK batch HTML QA report writer
-│   └── cli.py              # batch CLI entry point (both pipelines)
+│   ├── qa_report.py        # CMYK batch HTML QA report writer (TAC + force-K columns)
+│   ├── delivery.py         # snapshot project state into deliveries/ for handoff
+│   └── cli.py              # batch CLI entry point (both pipelines + deliver)
 ├── tests/                      # pytest unit tests
 ├── docs/                       # design docs and changelog entries
 ├── tmp/                        # working scratch space (gitignored except .gitkeep)
@@ -76,6 +130,8 @@ illustration-color-edit/
 ├── color-config.json.example   # committed template for color + cmyk correction maps
 ├── color-config.json           # gitignored, your local color mappings
 ├── palette.json                # gitignored, curated CMYK palette (auto-created by Palette tab)
+├── semantic-palette.json       # gitignored, slot bindings + themes (auto-created by Semantic Palette tab)
+├── deliveries/                 # gitignored, per-handoff snapshots (configs + PDFs + manifest)
 ├── .env.example
 ├── .gitignore
 ├── requirements.txt
@@ -163,7 +219,14 @@ root) or absolute.
     "pdfx_compliance": false,                               // PDF/X-1a:2003 (forbids transparency)
     "generate_preview_png": true,                           // soft-proof PNG per file
     "preview_dpi": 150,                                     // soft-proof resolution
-    "audit_artifacts": true                                 // write `<name>_CMYK_report.txt` (and keep `.pdfx_def.ps`) per file
+    "audit_artifacts": true,                                // write `<name>_CMYK_report.txt` (and keep `.pdfx_def.ps`) per file
+    "filename_template": "",                                // empty = `<stem>_CMYK.pdf` default
+    "tac_limit_percent": 320.0,                             // Total Area Coverage cap; 320 typical coated, 240–280 uncoated
+    "tac_check_dpi": 100,                                   // resolution at which TAC is sampled
+    "force_k_min_stroke_pt": 0.5,                           // strokes ≤ this (pt) get flagged as fine-line
+    "force_k_min_text_pt": 9.0,                             // text smaller than this (pt) gets flagged
+    "safety_inches": 0.1875,                                // safety margin inset from trim (≈ 4.76 mm)
+    "show_guide_overlay": true                              // composite trim/bleed/safety guides on the soft-proof PNG
   }
 }
 ```
@@ -213,8 +276,9 @@ or
 & .\.venv\Scripts\python.exe -m streamlit run app\app.py
 ```
 
-The app has nine sidebar destinations, organised as: Library | grayscale
-pipeline (4 tabs) | CMYK pipeline (4 tabs).
+The app has eleven sidebar destinations organised as: **Library** ·
+**Project** (Semantic Palette + Accessibility, both cross-pipeline) ·
+**Grayscale** pipeline (4 tabs) · **CMYK** pipeline (5 tabs).
 
 1. **Library** — table of every SVG in `input/` with both grayscale and
    CMYK status columns. Multi-row selection drives the action bar:
@@ -225,44 +289,62 @@ pipeline (4 tabs) | CMYK pipeline (4 tabs).
    `pending`; the other pipeline and the global maps are left alone.
    Metadata files that end up empty for both pipelines are deleted so
    `metadata/` stays clean.
-2. **Editor** — grayscale per-illustration editor. Side-by-side original vs.
-   converted live preview, per-color picker with history suggestions, a
-   per-row **↺ reset** that clears that color's per-file override and its
-   global-map entry in one click, and an *Open output folder* shortcut.
-   Save flows drop identity picks (`target == source`) and picks that
-   already match the global map — they're pure noise in per-file
-   overrides.
-3. **Global Map** — view and edit the grayscale global registry. Usage counts.
-4. **Batch Export** — batch grayscale: writes `<name>_grayscale.svg` and (when
-   enabled) `<name>_grayscale.png` at the configured DPI into `output/`.
-5. **CMYK Editor** — CMYK per-illustration editor. Side-by-side original vs.
-   RGB-corrected live preview, per-color picker for the CMYK correction map,
-   plus a "Generate CMYK soft-proof" button that runs the full Inkscape →
-   Ghostscript pipeline once and shows the resulting PNG inline.
-6. **CMYK Global Map** — view and edit the project-wide
+2. **Semantic Palette** *(Project)* — bind authored hexes to named slots
+   (`status.bad`, `status.good`, …) and slots to per-pipeline targets
+   inside a theme. Re-skinning for a different publisher = swap themes,
+   no per-illustration touching. A one-shot **Migrate** button promotes
+   existing global-map entries to auto-named slots you can rename at
+   leisure. Resolution order at apply time: per-file override → active
+   theme → legacy global map → pass-through, so adoption is incremental
+   and additive.
+3. **Accessibility** *(Project)* — color-blind preview across the whole
+   library using Machado-2009 sRGB matrices. Two modes: a **library
+   strip** (one row per illustration, columns = simulations) for a
+   quick risk audit, and a **per-illustration grid** that lists which
+   color pairs collapse under which CB type. Severity slider 0.5–1.0;
+   "Show only affected" filter. Operates at the SVG level (color
+   substitution + inline render) — fast across 20+ files.
+4. **Editor** *(Grayscale)* — per-illustration editor. Side-by-side
+   original vs. converted live preview, per-color picker with history
+   suggestions, a per-row **↺ reset** that clears that color's per-file
+   override and its global-map entry in one click, and an *Open output
+   folder* shortcut. Save flows drop identity picks (`target == source`)
+   and picks that already match the global map.
+5. **Global Map** *(Grayscale)* — view and edit the grayscale global
+   registry. Usage counts.
+6. **Batch Export** *(Grayscale)* — writes `<name>_grayscale.svg` and
+   (when enabled) `<name>_grayscale.png` at the configured DPI into
+   `output/`.
+7. **CMYK Editor** — per-illustration editor. Side-by-side original vs.
+   RGB-corrected live preview, per-color picker for the CMYK correction
+   map, "Generate CMYK soft-proof" button, and an **Apply auto-fixes**
+   checkbox (persisted) that opts the file into Ghostscript's
+   `-dBlackText -dBlackVector` force-K flags during the next batch.
+8. **CMYK Global Map** — view and edit the project-wide
    `cmyk_correction_map`. Usage counts across illustrations.
-7. **Palette** — curated CMYK swatch picker. Cluster every source color in
-   the library into a small set of swatches via Lab k-means; each swatch
-   shows its *printed appearance* (computed by an ICC roundtrip) so picks
-   are made by what the press will produce, not by RGB hex math. Edit
-   labels, see which illustrations use each member color, and "Replace
-   globally" — a single action that updates the global correction map and
-   deletes every per-file override of the swatch's members in one pass,
-   with a before / after / on-press visual diff in the confirm dialog.
-   See [`docs/2026-05-08-curated-palette.md`](docs/2026-05-08-curated-palette.md).
-8. **CMYK Print Export** — batch CMYK: writes `<name>_CMYK.pdf` (and a
-   `<name>_CMYK_preview.png` soft-proof when enabled) at the configured trim
-   size into `output_cmyk/`, plus an HTML QA report. When
-   `cmyk_export.audit_artifacts` is on (the default), each PDF also gets a
-   `<name>_CMYK_report.txt` describing the ICC profile, page geometry, color
-   replacements, and exact Ghostscript command — a paper trail the book editor
-   or prepress operator can audit per illustration. Sidecars from prior runs
-   for the same stem are cleaned up on every export, so toggling the setting
-   never leaves orphans.
-9. **CMYK Settings** — paths, ICC profile, Ghostscript binary, trim/bleed,
-   PDF/X-1a, soft-proof DPI, audit-sidecars toggle. Also exposes a
-   *Maintenance → Clean identity entries from all CMYK metadata* button,
-   useful as a one-shot cleanup for files written by older save flows.
+9. **Palette** *(CMYK)* — curated CMYK swatch picker. Cluster every
+   source color in the library into a small set of swatches via Lab
+   k-means; each swatch shows its *printed appearance* (ICC roundtrip)
+   plus a colored **ΔE76 badge** (green ≤ 2 / yellow 2–5 / red > 5).
+   "Highlight ΔE ≥ 5" header toggle outlines gamut-clipping swatches in
+   red. "Replace globally" updates the global correction map + cleans
+   per-file overrides in one pass with a before / after / on-press
+   visual diff. See [`docs/2026-05-08-curated-palette.md`](docs/2026-05-08-curated-palette.md).
+10. **CMYK Print Export** — batch: writes `<name>_CMYK.pdf` (with the
+    soft-proof PNG carrying trim / bleed / safety overlays) into
+    `output_cmyk/`, plus an HTML QA report whose per-file row includes
+    **TAC max %** and **force-K detection counts** with a tooltip
+    showing mean / p99 / over-limit fraction. The bottom of the tab
+    has a **Create delivery package** button that snapshots
+    `config.json`, `color-config.json`, `semantic-palette.json` plus
+    every PDF (with SHA-256) into `deliveries/<UTC-stamp>-<slug>/`.
+11. **CMYK Settings** — paths, ICC profile, Ghostscript binary,
+    trim/bleed, PDF/X-1a, soft-proof DPI, audit-sidecars toggle, plus
+    the new **TAC limit / sample DPI / min stroke pt / min text pt**
+    print-quality knobs, **soft-proof guides** toggle + safety-margin
+    inset, and the **filename template** with a live preview against
+    the first three SVGs. Also exposes the
+    *Clean identity entries* maintenance button.
 
 The grayscale **Settings** tab mirrors this: read-only summary at the
 top, editable form for paths, PNG export, matching, and print safety
@@ -325,10 +407,28 @@ colors no longer match.
 
 # convert only illustrations marked CMYK-reviewed
 & .\.venv\Scripts\python.exe -m src.cli cmyk-convert --only-reviewed
+
+# override the output filename template just for this run
+& .\.venv\Scripts\python.exe -m src.cli cmyk-convert `
+    --filename-template "fig_{chapter:02d}_{figure:02d}_CMYK"
 ```
 
 The CMYK CLI emits per-file status, a final summary, and writes
-`output_cmyk/cmyk_qa_report.html` describing the run.
+`output_cmyk/cmyk_qa_report.html` describing the run (now with TAC and
+force-K columns per file).
+
+### Delivery snapshots
+
+```powershell
+# snapshot project state + every PDF in output_cmyk/ to deliveries/
+& .\.venv\Scripts\python.exe -m src.cli deliver --label "acme-2026-05"
+```
+
+Bundles `config.json`, `color-config.json`, `semantic-palette.json` (when
+present), every matching PDF + soft-proof PNG (hardlinked when possible),
+a `manifest.json` with SHA-256 per file, and an auto-generated
+`README.md`. One snapshot per publisher hand-off so tweaks weeks later
+are byte-reproducible.
 
 ## CMYK print export workflow
 
@@ -374,7 +474,10 @@ color CMYK PDFs to a publisher.
 
 For the *why* behind the design (RGB correction vs explicit CMYK overrides,
 soft-proof timing, ICC profile choice, PDF/X), see
-[`docs/2026-05-07-cmyk-pipeline.md`](docs/2026-05-07-cmyk-pipeline.md).
+[`docs/2026-05-07-cmyk-pipeline.md`](docs/2026-05-07-cmyk-pipeline.md). For
+the theory behind the publisher-grade additions (TAC, force-K, semantic
+palette, color-blind risk, delivery snapshots), see
+[`docs/2026-05-09-publisher-grade-additions.md`](docs/2026-05-09-publisher-grade-additions.md).
 
 ## End-to-end workflow
 

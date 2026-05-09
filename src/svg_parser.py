@@ -146,6 +146,14 @@ class ParsedSVG:
     tree: etree._ElementTree
     colors: dict[str, ColorUsage]
     raw_bytes: bytes
+    color_space_warnings: list[str] = field(default_factory=list)
+    """Warnings about non-sRGB hints in the SVG.
+
+    Empty list = the SVG looks like plain sRGB (Affinity Designer 2's
+    default). Non-empty list = something inside the file claims a
+    different color space; the pipeline still proceeds (the existing
+    ICC math assumes sRGB input) but the user should verify the output.
+    """
 
     @property
     def unique_color_count(self) -> int:
@@ -342,7 +350,80 @@ def parse_svg(source: Union[str, Path, bytes]) -> ParsedSVG:
             for raw_tok, norm in iter_color_tokens(text):
                 _record(norm, "style-block", raw_tok)
 
-    return ParsedSVG(source=src_path, tree=tree, colors=colors, raw_bytes=raw)
+    return ParsedSVG(
+        source=src_path,
+        tree=tree,
+        colors=colors,
+        raw_bytes=raw,
+        color_space_warnings=_detect_color_space_warnings(root),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Color-space sanity check
+# --------------------------------------------------------------------------- #
+# Allowed values for `color-interpolation` / `color-interpolation-filters`.
+# Per SVG 1.1, missing == "sRGB" for `color-interpolation-filters` and
+# "auto" (which the renderer typically resolves to sRGB) for
+# `color-interpolation`. Both are sRGB-equivalent for our purposes;
+# anything else (notably `linearRGB`) is worth surfacing.
+_SRGB_LIKE_INTERPOLATION = frozenset({"", "auto", "srgb"})
+
+
+def _detect_color_space_warnings(root: etree._Element) -> list[str]:
+    """Scan an SVG root for non-sRGB color-space hints.
+
+    Returns one human-readable warning string per finding. Empty list is
+    the happy path. Whatever this returns gets attached to the
+    :class:`ParsedSVG` so editor tabs and the CLI can surface it.
+
+    What we look for:
+
+      * ``<color-profile>`` elements (deprecated SVG 1.1 way of declaring
+        an embedded ICC). Their presence implies the author meant a
+        non-default color space.
+      * ``color-interpolation`` / ``color-interpolation-filters``
+        attributes whose value is not the sRGB-equivalent default
+        (``auto`` / ``sRGB`` / missing).
+      * Inline ``style`` declarations of the same two properties.
+
+    Affinity Designer 2's default SVG export hits none of these.
+    """
+    warnings: list[str] = []
+    profile_count = 0
+    bad_interp: dict[str, set[str]] = {}
+
+    def _check_interp(prop: str, value: str) -> None:
+        norm = (value or "").strip().lower()
+        if norm and norm not in _SRGB_LIKE_INTERPOLATION:
+            bad_interp.setdefault(prop, set()).add(norm)
+
+    for el in root.iter():
+        local = _localname(el.tag)
+        if local == "color-profile":
+            profile_count += 1
+        for prop in ("color-interpolation", "color-interpolation-filters"):
+            val = el.get(prop)
+            if val is not None:
+                _check_interp(prop, val)
+        style = el.get("style")
+        if style:
+            for sprop, sval in parse_style_attribute(style):
+                if sprop in ("color-interpolation", "color-interpolation-filters"):
+                    _check_interp(sprop, sval)
+
+    if profile_count:
+        warnings.append(
+            f"<color-profile> element found ({profile_count}) — file declares "
+            "a non-default color space. The CMYK pipeline assumes sRGB input; "
+            "verify the soft-proof carefully."
+        )
+    for prop, values in bad_interp.items():
+        warnings.append(
+            f"{prop}={'/'.join(sorted(values))} — not sRGB-equivalent. "
+            "The CMYK pipeline assumes sRGB input."
+        )
+    return warnings
 
 
 def extract_unique_colors(source: Union[str, Path, bytes]) -> dict[str, int]:

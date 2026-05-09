@@ -12,12 +12,14 @@ from pathlib import Path
 
 import streamlit as st
 
-from common import open_in_explorer
+from common import load_semantic_palette, open_in_explorer
 from src.cmyk_pipeline import CmykContext, process_batch
-from src.config import CmykExportConfig
+from src.config import PROJECT_ROOT, CmykExportConfig
+from src.delivery import create_snapshot
 from src.library_manager import LibraryManager
-from src.mapping_store import MappingStore, merge_mappings
+from src.mapping_store import MappingStore
 from src.qa_report import write_report
+from src.semantic_palette import merge_with_semantic
 
 
 def render() -> None:
@@ -86,6 +88,13 @@ def render() -> None:
             generate_preview=ce.generate_preview_png,
             preview_dpi=ce.preview_dpi,
             audit_artifacts=ce.audit_artifacts,
+            filename_template=ce.filename_template,
+            tac_limit_percent=ce.tac_limit_percent,
+            tac_check_dpi=ce.tac_check_dpi,
+            force_k_min_stroke_pt=ce.force_k_min_stroke_pt,
+            force_k_min_text_pt=ce.force_k_min_text_pt,
+            safety_inches=ce.safety_inches,
+            show_guide_overlay=ce.show_guide_overlay,
         )
 
         # Build per-file mapping list. Each illustration gets its own merge
@@ -121,10 +130,15 @@ def render() -> None:
         report.palette_mapped = {k: v["target"] for k, v in cmyk_global.items()}
 
         t_start = _time.time()
+        from dataclasses import replace as _replace
+        sem = load_semantic_palette()
         for i, e in enumerate(entries, start=1):
             illu = store.load_illustration(e.filename)
-            full_mapping = merge_mappings(cmyk_global, illu.cmyk_overrides)
-            r = process_one(e.path, full_mapping, ctx)
+            full_mapping = merge_with_semantic(
+                cmyk_global, illu.cmyk_overrides, sem, "cmyk",
+            )
+            per_ctx = _replace(ctx, apply_auto_fix=illu.cmyk_auto_fix)
+            r = process_one(e.path, full_mapping, per_ctx)
             report.files.append(r)
             if r.status == "ok":
                 illu.with_cmyk_status("exported")
@@ -178,4 +192,53 @@ def render() -> None:
             f"`{last['total_s']:.2f}s` · "
             f"[QA report]({last['qa_path']})"
         )
+
+    # ---- Delivery snapshot ------------------------------------------------- #
+    st.divider()
+    st.markdown("### Create delivery package")
+    st.caption(
+        "Freezes the current `config.json`, `color-config.json`, and "
+        "`semantic-palette.json` alongside hardlinked copies of every PDF "
+        "in the output directory. Use one snapshot per publisher hand-off "
+        "so tweaks weeks later are byte-reproducible."
+    )
+    dc1, dc2, dc3 = st.columns([3, 2, 2])
+    label = dc1.text_input(
+        "Delivery label",
+        placeholder="acme-2026-05",
+        key="cmyk_delivery_label",
+    )
+    pattern = dc2.text_input(
+        "PDF glob pattern",
+        value="*_CMYK.pdf",
+        key="cmyk_delivery_pattern",
+        help="Change to '*.pdf' if you set a custom filename template.",
+    )
+    dc3.write("")
+    dc3.write("")
+    if dc3.button(
+        "Create snapshot", key="cmyk_delivery_btn",
+        type="primary", width="stretch",
+    ):
+        if not label.strip():
+            st.error("Pick a label first.")
+        else:
+            try:
+                target = create_snapshot(
+                    label=label,
+                    project_root=PROJECT_ROOT,
+                    output_dir=ce.output_dir,
+                    pdf_pattern=pattern,
+                    icc_profile=str(ce.icc_profile_path),
+                    pdfx=ce.pdfx_compliance,
+                    width_inches=ce.target_width_inches,
+                    height_inches=ce.target_height_inches,
+                    bleed_inches=ce.bleed_inches,
+                )
+                st.success(f"Snapshot written to `{target}`")
+                ok, msg = open_in_explorer(target)
+                if not ok:
+                    st.caption(msg)
+            except Exception as exc:
+                st.error(f"Snapshot failed: {exc}")
         st.dataframe(last["files"], width="stretch")

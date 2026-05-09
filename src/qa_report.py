@@ -40,6 +40,36 @@ def _fmt_path(path: Path | None, base: Path) -> str:
     return f'<a href="{href}">{html.escape(rel.name)}</a>'
 
 
+def _tac_cell(tac) -> str:
+    if tac is None:
+        return '<td style="color:#888">—</td>'
+    color = {"ok": "#2a7", "warn": "#d97706", "fail": "#c33"}.get(tac.status, "#222")
+    return (
+        f'<td style="color:{color};text-align:right;font-variant-numeric:tabular-nums" '
+        f'title="threshold {tac.threshold_pct:.0f}%, mean {tac.mean_pct:.1f}%, '
+        f'p99 {tac.p99_pct:.1f}%, over-limit pixels {tac.violation_fraction*100:.4f}%">'
+        f"{tac.max_pct:.0f}% [{tac.status}]"
+        f"</td>"
+    )
+
+
+def _force_k_cell(fl, applied: bool) -> str:
+    if fl is None:
+        return '<td style="color:#888">—</td>'
+    if fl.total == 0:
+        return '<td style="color:#2a7">none</td>'
+    badge = (
+        '<span style="background:#2a7;color:#fff;border-radius:8px;padding:1px 6px;'
+        'font-size:0.78em;margin-left:4px">auto-fix on</span>'
+        if applied else ""
+    )
+    return (
+        f'<td title="strokes={fl.stroke_count}, text={fl.text_count}">'
+        f"{fl.stroke_count} stroke / {fl.text_count} text{badge}"
+        f"</td>"
+    )
+
+
 def render_report(report: BatchReport, output_dir: Path) -> str:
     """Return the QA report as an HTML string. Caller writes to disk."""
     rows: list[str] = []
@@ -60,6 +90,8 @@ def render_report(report: BatchReport, output_dir: Path) -> str:
             f"<td>{html.escape(f.filename)}</td>"
             f'<td style="color:{status_color};font-weight:600">{html.escape(f.status)}</td>'
             f'<td style="text-align:right">{f.replacements}</td>'
+            f"{_tac_cell(f.tac)}"
+            f"{_force_k_cell(f.fine_lines, f.auto_fix_applied)}"
             f"<td>{unmapped_html}</td>"
             f"<td>{warnings_html}</td>"
             f'<td style="text-align:right">{f.elapsed_seconds:.2f}s</td>'
@@ -132,11 +164,12 @@ def render_report(report: BatchReport, output_dir: Path) -> str:
 <table>
   <thead><tr>
     <th>file</th><th>status</th><th style="text-align:right">replacements</th>
+    <th style="text-align:right">TAC max</th><th>force-K</th>
     <th>unmapped colors</th><th>warnings</th>
     <th style="text-align:right">elapsed</th>
     <th>PDF</th><th>preview</th><th>error</th>
   </tr></thead>
-  <tbody>{''.join(rows) or '<tr><td colspan="9" style="color:#888">No files processed.</td></tr>'}</tbody>
+  <tbody>{''.join(rows) or '<tr><td colspan="11" style="color:#888">No files processed.</td></tr>'}</tbody>
 </table>
 </body>
 </html>

@@ -181,6 +181,7 @@ def build_gs_command(
     gs_exe: str,
     pdfx: bool = False,
     pdfx_def_ps: Optional[Path] = None,
+    force_k: bool = False,
 ) -> list[str]:
     """Build the Ghostscript command for RGB→CMYK conversion.
 
@@ -211,6 +212,10 @@ def build_gs_command(
         "-sDEVICE=pdfwrite",
         f"-sOutputFile={output_pdf}",
     ]
+    if force_k:
+        # Push exact-black text and vectors through the K plate only — keeps
+        # fine type and hairlines from misregistering on press.
+        cmd += ["-dBlackText=true", "-dBlackVector=true"]
     if pdfx:
         # GS picks PDF 1.4 automatically for PDF/X mode. Do *not* set
         # -dCompatibilityLevel=1.4 explicitly: in GS 10.x this combo causes
@@ -241,6 +246,7 @@ def rgb_pdf_to_cmyk(
     gs_exe: str = "gswin64c",
     pdfx: bool = False,
     keep_pdfx_def_ps: bool = True,
+    force_k: bool = False,
 ) -> Path:
     """Convert an RGB PDF to a CMYK PDF using the given ICC profile.
 
@@ -286,7 +292,7 @@ def rgb_pdf_to_cmyk(
 
     cmd = build_gs_command(
         input_pdf, output_pdf, icc_profile, bin_path,
-        pdfx=pdfx, pdfx_def_ps=pdfx_def_ps,
+        pdfx=pdfx, pdfx_def_ps=pdfx_def_ps, force_k=force_k,
     )
     log.info("Ghostscript RGB→CMYK: %s → %s (pdfx=%s, profile=%s)",
              input_pdf.name, output_pdf.name, pdfx, icc_profile.name)

@@ -6,8 +6,10 @@ from pathlib import Path
 
 import streamlit as st
 
+from common import load_semantic_palette
 from src.library_manager import LibraryManager
-from src.mapping_store import MappingStore, merge_mappings
+from src.mapping_store import MappingStore
+from src.semantic_palette import merge_with_semantic
 from src.svg_writer import apply_mapping_with_report, write_png_from_svg
 
 
@@ -35,11 +37,12 @@ def render() -> None:
         else:
             cfg.paths.output_dir.mkdir(parents=True, exist_ok=True)
             global_map = store.load_global_map()
+            sem = load_semantic_palette()
             log_rows: list[dict] = []
             progress = st.progress(0.0)
             for i, e in enumerate(entries, start=1):
                 illu = store.load_illustration(e.filename)
-                merged = merge_mappings(global_map, illu.overrides)
+                merged = merge_with_semantic(global_map, illu.overrides, sem, "grayscale")
                 svg_bytes, report = apply_mapping_with_report(e.path, merged)
                 stem = Path(e.filename).stem
                 dst = cfg.paths.output_dir / f"{stem}_grayscale.svg"

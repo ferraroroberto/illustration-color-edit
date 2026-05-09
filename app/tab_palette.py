@@ -27,11 +27,17 @@ from typing import Optional
 import plotly.graph_objects as go
 import streamlit as st
 
-from common import cached_color_extract, color_swatch
-from src.cmyk_gamut import cmyk_roundtrip_rgb
+from common import (
+    cached_color_extract,
+    color_swatch,
+    load_semantic_palette,
+    numeric_metric_cell,
+)
+from src.cmyk_gamut import cmyk_gamut_delta, cmyk_roundtrip_rgb
 from src.config import PROJECT_ROOT
 from src.library_manager import LibraryManager
-from src.mapping_store import MappingStore, merge_mappings
+from src.mapping_store import MappingStore
+from src.semantic_palette import merge_with_semantic
 from src.palette import (
     HUE_FAMILIES,
     Palette,
@@ -256,8 +262,13 @@ def _visual_diffs_for_swatch(
         after_overrides = {
             k: v for k, v in illu.cmyk_overrides.items() if k not in member_set
         }
-        before_mapping = merge_mappings(cmyk_global_before, before_overrides)
-        after_mapping = merge_mappings(cmyk_global_after, after_overrides)
+        sem = load_semantic_palette()
+        before_mapping = merge_with_semantic(
+            cmyk_global_before, before_overrides, sem, "cmyk",
+        )
+        after_mapping = merge_with_semantic(
+            cmyk_global_after, after_overrides, sem, "cmyk",
+        )
         if before_mapping == after_mapping:
             continue
         try:
@@ -406,9 +417,10 @@ def _render_replace_visual_preview(
 # --------------------------------------------------------------------------- #
 # UI sections
 # --------------------------------------------------------------------------- #
-def _render_header(cfg, palette: Palette, sig: str) -> None:
+def _render_header(cfg, palette: Palette, sig: str) -> bool:
+    """Render header row. Returns the current value of the high-ΔE highlight toggle."""
     icc_path = Path(cfg.cmyk_export.icc_profile_path)
-    cols = st.columns([3, 1, 2])
+    cols = st.columns([3, 1, 2, 2])
     with cols[0]:
         st.markdown(f"**Active ICC:** `{icc_path.name}`")
     with cols[1]:
@@ -423,6 +435,18 @@ def _render_header(cfg, palette: Palette, sig: str) -> None:
         else:
             # Should not happen — _ensure_appearance_fresh runs before this.
             st.caption("⟳ Rebuilding previews…")
+    with cols[3]:
+        return st.checkbox(
+            "Highlight ΔE ≥ 5",
+            value=False,
+            key="palette_highlight_high_delta",
+            help=(
+                "Outline swatches whose source→print ΔE76 exceeds 5 in red. "
+                "These are colors that visibly shift through the active ICC "
+                "and may need a less-saturated picked."
+            ),
+            disabled=not icc_path.is_file() or not palette.swatches,
+        )
 
 
 def _render_seed_panel(
@@ -482,8 +506,20 @@ def _render_seed_panel(
                     st.rerun()
 
 
-def _render_palette_grid(palette: Palette, *, key: str) -> None:
-    """Render the swatch grid and update ``st.session_state.palette_selected`` on click."""
+def _render_palette_grid(
+    palette: Palette,
+    *,
+    key: str,
+    icc_path: Optional[Path] = None,
+    highlight_high_delta: bool = False,
+    delta_threshold: float = 5.0,
+) -> None:
+    """Render the swatch grid and update ``st.session_state.palette_selected`` on click.
+
+    When ``highlight_high_delta`` is set, swatches whose source→print
+    ΔE76 exceeds ``delta_threshold`` get a red border so the user can
+    spot gamut-clipping picks at a glance.
+    """
     grid = bucketize_for_grid(palette.swatches)
     family_to_y = {f: i for i, f in enumerate(HUE_FAMILIES)}
 
@@ -496,6 +532,8 @@ def _render_palette_grid(palette: Palette, *, key: str) -> None:
     line_widths: list[float] = []
     line_colors: list[str] = []
 
+    icc_available = icc_path is not None and Path(icc_path).is_file()
+
     for family, row in grid.items():
         for col_idx, sw in enumerate(row):
             if sw is None:
@@ -504,14 +542,30 @@ def _render_palette_grid(palette: Palette, *, key: str) -> None:
             ys.append(family_to_y[family])
             marker_colors.append(palette.appearance_for(sw.id) or sw.source_hex)
             customdata.append(sw.id)
+            de = (
+                cmyk_gamut_delta(sw.source_hex, icc_path)
+                if icc_available
+                else None
+            )
+            de_line = (
+                f"<br>ΔE76: {de:.2f}" if isinstance(de, float) else ""
+            )
             hover_text.append(
                 f"<b>{sw.label or '(unlabeled)'}</b><br>"
                 f"src: {sw.source_hex} · members: {len(sw.members)}<br>"
-                f"id: {sw.id}"
+                f"id: {sw.id}{de_line}"
+            )
+            high_delta = (
+                highlight_high_delta
+                and isinstance(de, float)
+                and de > delta_threshold
             )
             if sw.id == selected_id:
                 line_widths.append(3.5)
                 line_colors.append("#0066FF")
+            elif high_delta:
+                line_widths.append(2.5)
+                line_colors.append("#EF4444")
             else:
                 line_widths.append(1.0)
                 line_colors.append("#444")
@@ -599,6 +653,7 @@ def _render_swatch_detail_panel(
     palette_store: PaletteStore,
     swatch_id: str,
     color_to_files: dict[str, list[str]],
+    icc_path: Optional[Path] = None,
 ) -> None:
     """Compact swatch editor that fits in the right column next to the grid.
 
@@ -614,6 +669,12 @@ def _render_swatch_detail_panel(
         return
 
     preview_hex = palette.appearance_for(sw.id) or sw.source_hex
+    de = (
+        cmyk_gamut_delta(sw.source_hex, icc_path)
+        if icc_path is not None and Path(icc_path).is_file()
+        else None
+    )
+    de_badge = numeric_metric_cell(de, suffix="ΔE")
     st.markdown(
         f'<div style="display:flex;align-items:center;gap:14px;margin-bottom:8px;">'
         f'<div style="width:80px;height:80px;background:{preview_hex};'
@@ -622,7 +683,8 @@ def _render_swatch_detail_panel(
         f'<div style="font-size:1.05rem;font-weight:600;">'
         f'{sw.label or "(unlabeled)"}</div>'
         f'<div style="color:#666;font-size:0.85rem;">'
-        f'id <code>{sw.id}</code> · source <code>{sw.source_hex}</code>'
+        f'id <code>{sw.id}</code> · source <code>{sw.source_hex}</code> '
+        f'· {de_badge}'
         f'</div></div></div>',
         unsafe_allow_html=True,
     )
@@ -819,7 +881,7 @@ def render() -> None:
     icc_path = Path(cfg.cmyk_export.icc_profile_path)
     sig = _ensure_appearance_fresh(palette, palette_store, icc_path)
 
-    _render_header(cfg, palette, sig)
+    highlight_high_delta = _render_header(cfg, palette, sig)
     st.divider()
     _render_seed_panel(palette, palette_store, library)
 
@@ -836,12 +898,18 @@ def render() -> None:
     grid_col, detail_col = st.columns([3, 2], gap="large")
     with grid_col:
         st.markdown("##### Swatches  *(click to select)*")
-        _render_palette_grid(palette, key="palette_grid")
+        _render_palette_grid(
+            palette,
+            key="palette_grid",
+            icc_path=icc_path,
+            highlight_high_delta=highlight_high_delta,
+        )
     with detail_col:
         selected_id = st.session_state.get("palette_selected")
         if selected_id and palette.find(selected_id):
             _render_swatch_detail_panel(
-                palette, palette_store, selected_id, color_to_files
+                palette, palette_store, selected_id, color_to_files,
+                icc_path=icc_path,
             )
         else:
             st.caption("Click a swatch in the grid to edit it or run actions.")

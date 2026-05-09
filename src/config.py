@@ -82,6 +82,35 @@ class CmykExportConfig:
     stem are removed on re-export.
     """
 
+    filename_template: str = ""
+    """Output filename template. Empty = ``<stem>_CMYK.pdf`` (historical default).
+
+    Supports ``{stem}``, ``{chapter}``, ``{figure}`` (raw or padded via
+    ``{chapter:02d}``), ``{description}``, ``{slug}``. The template
+    produces a stem; ``.pdf`` is appended by the pipeline. See
+    :mod:`src.filename_template` for the rules.
+    """
+
+    tac_limit_percent: float = 320.0
+    """Total Area Coverage limit in percent. 320 is a typical coated-stock
+    spec; check with the publisher (uncoated is usually 240–280)."""
+
+    tac_check_dpi: int = 100
+    """Resolution at which TAC is sampled. 100 is enough for flat-color
+    illustrations; raise to 150–200 if features are very fine."""
+
+    force_k_min_stroke_pt: float = 0.5
+    """Strokes ≤ this many points (at trim scale) are flagged for force-K."""
+
+    force_k_min_text_pt: float = 9.0
+    """Text with font-size ≤ this many points is flagged for force-K."""
+
+    safety_inches: float = 0.1875
+    """Safety margin inset from trim. 0.1875" ≈ 4.76 mm — common book default."""
+
+    show_guide_overlay: bool = True
+    """Draw trim / bleed / safety rectangles on the soft-proof PNG."""
+
 
 @dataclass
 class AppConfig:
@@ -195,6 +224,13 @@ def load_config() -> AppConfig:
         generate_preview_png=bool(cmyk.get("generate_preview_png", True)),
         preview_dpi=int(cmyk.get("preview_dpi", 150)),
         audit_artifacts=bool(cmyk.get("audit_artifacts", True)),
+        filename_template=str(cmyk.get("filename_template", "")),
+        tac_limit_percent=float(cmyk.get("tac_limit_percent", 320.0)),
+        tac_check_dpi=int(cmyk.get("tac_check_dpi", 100)),
+        force_k_min_stroke_pt=float(cmyk.get("force_k_min_stroke_pt", 0.5)),
+        force_k_min_text_pt=float(cmyk.get("force_k_min_text_pt", 9.0)),
+        safety_inches=float(cmyk.get("safety_inches", 0.1875)),
+        show_guide_overlay=bool(cmyk.get("show_guide_overlay", True)),
     )
 
     cfg.log_level = str(color_raw.get("logging", {}).get("level", "INFO")).upper()

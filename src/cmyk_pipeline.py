@@ -40,6 +40,10 @@ from .cmyk_convert import (
     pdf_to_preview_png,
     rgb_pdf_to_cmyk,
 )
+from .bleed_overlay import composite_guides
+from .cmyk_tac import TacComputeError, TacReport, compute_tac
+from .filename_template import TemplateError, apply_template
+from .force_k import FineLineReport, find_fine_lines
 from .svg_parser import _localname, parse_svg
 from .svg_to_pdf import InkscapeNotFoundError, SvgToPdfError, svg_to_pdf
 from .svg_writer import apply_mapping_with_report
@@ -70,6 +74,22 @@ class CmykContext:
     preview_dpi: int = 150
     audit_artifacts: bool = True
     tmp_dir: Optional[Path] = None  # defaults to output_dir / "_tmp"
+    # Output filename template. Empty = "<stem>_CMYK.pdf" historical default.
+    # See :mod:`src.filename_template` for the placeholder grammar.
+    filename_template: str = ""
+    # TAC and force-K knobs. The check itself always runs (cheap detection);
+    # the auto-fix flags are only applied when the per-file ``cmyk_auto_fix``
+    # flag is on (passed in via ``apply_auto_fix`` below).
+    tac_limit_percent: float = 320.0
+    tac_check_dpi: int = 100
+    force_k_min_stroke_pt: float = 0.5
+    force_k_min_text_pt: float = 9.0
+    apply_auto_fix: bool = False
+    """Per-file opt-in. When True, Ghostscript's force-K flags are added
+    so exact-black text/vectors land on K only. The detection pass still
+    runs in either case so the audit report stays accurate."""
+    safety_inches: float = 0.1875
+    show_guide_overlay: bool = True
     # Cached at batch start so each file's report can record it without
     # spawning N extra `gs -v` subprocesses. Empty string = not yet probed.
     ghostscript_version: str = ""
@@ -95,6 +115,10 @@ class FileResult:
     warnings: list[str] = field(default_factory=list)
     error: Optional[str] = None
     elapsed_seconds: float = 0.0
+    tac: Optional[TacReport] = None
+    fine_lines: Optional[FineLineReport] = None
+    auto_fix_applied: bool = False
+    """Whether the Ghostscript force-K flags were active for this file."""
 
 
 @dataclass
@@ -251,6 +275,9 @@ def write_conversion_report(
     gs_command: list[str],
     elapsed_seconds: float,
     started_iso: str,
+    tac: Optional["TacReport"] = None,
+    fine_lines: Optional["FineLineReport"] = None,
+    auto_fix_applied: bool = False,
 ) -> Path:
     """Write a human-readable audit report for one CMYK conversion.
 
@@ -290,6 +317,30 @@ def write_conversion_report(
         f"{preview_png.name} ({_safe_size(preview_png)})" if preview_png else "not generated"
     )
 
+    if tac is not None:
+        tac_block = (
+            f"  Threshold:        {tac.threshold_pct:.0f}%\n"
+            f"  Max coverage:     {tac.max_pct:.1f}%\n"
+            f"  99th percentile:  {tac.p99_pct:.1f}%\n"
+            f"  Mean coverage:    {tac.mean_pct:.1f}%\n"
+            f"  Pixels over limit: {tac.violation_fraction*100:.4f}%  "
+            f"[{tac.status.upper()}]"
+        )
+    else:
+        tac_block = "  (not measured)"
+
+    if fine_lines is not None:
+        fl_lines = [f"  Auto-fix applied: {'yes' if auto_fix_applied else 'no (detection only)'}"]
+        fl_lines.append(f"  Fine strokes:     {fine_lines.stroke_count}")
+        fl_lines.append(f"  Small text:       {fine_lines.text_count}")
+        for s in fine_lines.samples[:8]:
+            fl_lines.append(f"    - {s.kind} {s.size_pt:.2f}pt  {s.color_hex}  {s.sample}")
+        if fine_lines.total > len(fine_lines.samples[:8]):
+            fl_lines.append(f"    ...({fine_lines.total - len(fine_lines.samples[:8])} more)")
+        fl_block = "\n".join(fl_lines)
+    else:
+        fl_block = "  (not measured)"
+
     body = f"""CMYK conversion report
 ======================
 Generated:        {started_iso}
@@ -316,6 +367,14 @@ Pre-correction (RGB to RGB before Ghostscript)
 Replacements:     {replacements} total
 {shifts_block}
 Unmapped colors:  {unmapped_str}
+
+Total Area Coverage (TAC)
+-------------------------
+{tac_block}
+
+Force-K (fine lines / small text)
+---------------------------------
+{fl_block}
 
 SVG content warnings
 --------------------
@@ -373,13 +432,44 @@ def process_one(
         tmp = ctx.resolved_tmp_dir()
         tmp.mkdir(parents=True, exist_ok=True)
 
+        # Resolve the output filename. Honour ctx.filename_template when set,
+        # falling back to "<stem>_CMYK" when empty. A template that needs a
+        # chapter prefix the source filename doesn't carry surfaces as a
+        # warning rather than killing the batch.
+        out_stem = f"{stem}_CMYK"
+        if ctx.filename_template:
+            try:
+                out_stem = apply_template(ctx.filename_template, stem)
+            except TemplateError as exc:
+                result.warnings.append(
+                    f"filename template fell back to default: {exc}"
+                )
+
         # Sweep any audit sidecars left from a previous export of this stem.
         # Done up front so a re-run that disables audit_artifacts (or fails
         # before the report stage) leaves no orphans behind.
-        cmyk_pdf = ctx.output_dir / f"{stem}_CMYK.pdf"
+        cmyk_pdf = ctx.output_dir / f"{out_stem}.pdf"
         _purge_prior_sidecars(cmyk_pdf)
 
         result.warnings = detect_svg_warnings(svg_path)
+
+        # Fine-line / small-text detection runs unconditionally — cheap, and
+        # the audit sidecar shows it whether or not auto-fix is enabled.
+        try:
+            result.fine_lines = find_fine_lines(
+                svg_path,
+                trim_inches=(ctx.width_inches, ctx.height_inches),
+                min_stroke_pt=ctx.force_k_min_stroke_pt,
+                min_text_pt=ctx.force_k_min_text_pt,
+            )
+            if result.fine_lines.total > 0 and not ctx.apply_auto_fix:
+                result.warnings.append(
+                    f"force-K candidates: {result.fine_lines.summary()} — "
+                    "enable per-file auto-fix or convert these to pure black "
+                    "in the source to keep them on the K plate."
+                )
+        except Exception as exc:  # pragma: no cover — defensive
+            log.warning("fine-line detection failed for %s: %s", svg_path.name, exc)
 
         # 1. Apply RGB→RGB pre-correction. Even if the map is empty we still
         #    pass through to normalize hex case in the SVG; that's harmless.
@@ -414,12 +504,39 @@ def process_one(
             gs_exe=ctx.ghostscript_exe,
             pdfx=ctx.pdfx,
             keep_pdfx_def_ps=ctx.audit_artifacts,
+            force_k=ctx.apply_auto_fix,
         )
         result.output_pdf = cmyk_pdf
+        result.auto_fix_applied = ctx.apply_auto_fix
+
+        # 3b. TAC check on the produced CMYK PDF. Best-effort: a failure
+        #     in the rasterizer should not kill the conversion result.
+        try:
+            result.tac = compute_tac(
+                cmyk_pdf,
+                gs_exe=ctx.ghostscript_exe,
+                dpi=ctx.tac_check_dpi,
+                threshold_pct=ctx.tac_limit_percent,
+            )
+            if result.tac.status == "fail":
+                result.warnings.append(
+                    f"TAC: {result.tac.violation_fraction*100:.2f}% of pixels "
+                    f"exceed {ctx.tac_limit_percent:.0f}% (max {result.tac.max_pct:.0f}%) "
+                    "— printer may reject; consider less-saturated targets in "
+                    "the CMYK correction map."
+                )
+            elif result.tac.status == "warn":
+                result.warnings.append(
+                    f"TAC: a few pixels (<0.1%) exceed {ctx.tac_limit_percent:.0f}% "
+                    f"(max {result.tac.max_pct:.0f}%) — usually safe."
+                )
+        except (TacComputeError, GhostscriptNotFoundError) as exc:
+            log.warning("TAC check failed for %s: %s", svg_path.name, exc)
+            result.warnings.append(f"TAC check unavailable: {exc}")
 
         # 4. Optional soft-proof PNG.
         if ctx.generate_preview:
-            preview = ctx.output_dir / f"{stem}_CMYK_preview.png"
+            preview = ctx.output_dir / f"{out_stem}_preview.png"
             try:
                 pdf_to_preview_png(
                     cmyk_pdf, preview,
@@ -428,6 +545,20 @@ def process_one(
                     gs_exe=ctx.ghostscript_exe,
                 )
                 result.preview_png = preview
+                if ctx.show_guide_overlay:
+                    try:
+                        composite_guides(
+                            preview,
+                            trim_w_in=ctx.width_inches,
+                            trim_h_in=ctx.height_inches,
+                            bleed_in=ctx.bleed_inches,
+                            safety_in=ctx.safety_inches,
+                            dpi=ctx.preview_dpi,
+                        )
+                    except Exception as gxc:  # pragma: no cover — defensive
+                        log.warning("guide overlay failed for %s: %s",
+                                    preview.name, gxc)
+                        result.warnings.append(f"guide overlay failed: {gxc}")
             except CmykConvertError as exc:
                 result.warnings.append(f"preview PNG failed: {exc}")
 
@@ -443,6 +574,7 @@ def process_one(
                 rgb_pdf, cmyk_pdf, ctx.icc_profile, gs_resolved,
                 pdfx=ctx.pdfx,
                 pdfx_def_ps=pdfx_def_ps if ctx.pdfx else None,
+                force_k=ctx.apply_auto_fix,
             )
             write_conversion_report(
                 report_path=report_path,
@@ -466,6 +598,9 @@ def process_one(
                 gs_command=gs_command,
                 elapsed_seconds=round(time.time() - started, 3),
                 started_iso=started_iso,
+                tac=result.tac,
+                fine_lines=result.fine_lines,
+                auto_fix_applied=result.auto_fix_applied,
             )
             result.report_txt = report_path
 

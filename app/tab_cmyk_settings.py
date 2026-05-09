@@ -21,6 +21,8 @@ from pathlib import Path
 import streamlit as st
 
 from src.config import CmykExportConfig
+from src.filename_template import TemplateError, apply_template
+from src.library_manager import LibraryManager
 
 
 def _persist_settings(cfg) -> Path | None:
@@ -44,9 +46,49 @@ def _persist_settings(cfg) -> Path | None:
         "generate_preview_png": cfg.cmyk_export.generate_preview_png,
         "preview_dpi": cfg.cmyk_export.preview_dpi,
         "audit_artifacts": cfg.cmyk_export.audit_artifacts,
+        "filename_template": cfg.cmyk_export.filename_template,
+        "tac_limit_percent": cfg.cmyk_export.tac_limit_percent,
+        "tac_check_dpi": cfg.cmyk_export.tac_check_dpi,
+        "force_k_min_stroke_pt": cfg.cmyk_export.force_k_min_stroke_pt,
+        "force_k_min_text_pt": cfg.cmyk_export.force_k_min_text_pt,
+        "safety_inches": cfg.cmyk_export.safety_inches,
+        "show_guide_overlay": cfg.cmyk_export.show_guide_overlay,
     }
     cfg_path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
     return cfg_path
+
+
+def _render_filename_preview(template: str, library: LibraryManager) -> None:
+    """Show what the active template would produce against the first 3 SVGs.
+
+    Pure UI sugar — keeps the user from saving a typoed template and only
+    discovering the problem at batch time. Empty template → silent (the
+    default behavior is already obvious).
+    """
+    if not template or not template.strip():
+        return
+    sample_paths = library.list_svg_paths()[:3]
+    if not sample_paths:
+        st.caption("Template preview unavailable — `input/` is empty.")
+        return
+    rows: list[str] = []
+    any_error = False
+    for path in sample_paths:
+        stem = path.stem
+        try:
+            out_stem = apply_template(template, stem)
+            rows.append(f"`{path.name}` → `{out_stem}.pdf`")
+        except TemplateError as exc:
+            any_error = True
+            rows.append(f"`{path.name}` → ⚠ {exc} (falls back to `{stem}_CMYK.pdf`)")
+    st.markdown("**Template preview**")
+    for r in rows:
+        st.markdown(f"- {r}")
+    if any_error:
+        st.caption(
+            "Files without a parseable chapter.figure prefix fall back to "
+            "the default `<stem>_CMYK.pdf` and emit a warning per file."
+        )
 
 
 def _format_bytes(n: int) -> str:
@@ -171,6 +213,68 @@ def render() -> None:
             "folder containing only the final PDFs (and preview PNGs)."
         ),
     )
+
+    st.markdown("##### Print quality gates")
+    q1, q2, q3, q4 = st.columns(4)
+    ce.tac_limit_percent = q1.number_input(
+        "TAC limit (%)", min_value=180.0, max_value=400.0,
+        value=float(ce.tac_limit_percent), step=10.0,
+        key="cmyk_settings_tac_limit",
+        help="Total Area Coverage cap. 320 typical for coated, 240–280 for uncoated.",
+    )
+    ce.tac_check_dpi = q2.number_input(
+        "TAC sample DPI", min_value=72, max_value=300,
+        value=int(ce.tac_check_dpi), step=24,
+        key="cmyk_settings_tac_dpi",
+        help="100 dpi is enough for flat-color art; raise for very fine features.",
+    )
+    ce.force_k_min_stroke_pt = q3.number_input(
+        "Min stroke (pt)", min_value=0.0, max_value=4.0,
+        value=float(ce.force_k_min_stroke_pt), step=0.05,
+        key="cmyk_settings_min_stroke_pt",
+        help="Near-black strokes thinner than this are flagged for force-K.",
+    )
+    ce.force_k_min_text_pt = q4.number_input(
+        "Min text (pt)", min_value=0.0, max_value=24.0,
+        value=float(ce.force_k_min_text_pt), step=0.5,
+        key="cmyk_settings_min_text_pt",
+        help="Near-black text smaller than this is flagged for force-K.",
+    )
+
+    st.markdown("##### Soft-proof guides")
+    g1, g2 = st.columns([1, 3])
+    ce.show_guide_overlay = g1.checkbox(
+        "Draw trim/bleed/safety guides on soft-proof PNGs",
+        value=ce.show_guide_overlay,
+        key="cmyk_settings_show_guides",
+        help=(
+            "Composites three rectangles on every soft-proof PNG: solid red "
+            "trim line, dashed magenta bleed (when bleed > 0), dashed cyan "
+            "safety inset. Catches annotations creeping into the cut zone."
+        ),
+    )
+    ce.safety_inches = g2.number_input(
+        "Safety margin (inches)", min_value=0.0, max_value=1.0,
+        value=float(ce.safety_inches), step=0.0625,
+        key="cmyk_settings_safety",
+        help="Distance from trim that critical content should stay inside. 0.1875\" ≈ 4.76 mm.",
+    )
+
+    ce.filename_template = st.text_input(
+        "Output filename template",
+        value=ce.filename_template,
+        key="cmyk_settings_filename_template",
+        help=(
+            "Optional template for output PDF stems. Empty = `<stem>_CMYK.pdf` "
+            "default. Placeholders: `{stem}`, `{chapter}` (or `{chapter:02d}`), "
+            "`{figure}` (or `{figure:02d}`), `{description}`, `{slug}`. "
+            "Chapter/figure are auto-parsed from leading numeric prefixes "
+            "like `04.03 - …`, `1.2 …`, `4-3 …`, `4_3 …`."
+        ),
+        placeholder="fig_{chapter:02d}_{figure:02d}_CMYK",
+    )
+    _render_filename_preview(ce.filename_template, st.session_state.library)
+
     if st.button("Save settings to config.json", key="cmyk_save_settings",
                  type="primary", width="content"):
         written = _persist_settings(cfg)

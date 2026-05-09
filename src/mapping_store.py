@@ -56,6 +56,14 @@ class IllustrationMapping:
     overrides: dict[str, str] = field(default_factory=dict)
     cmyk_status: Status = "pending"
     cmyk_overrides: dict[str, str] = field(default_factory=dict)
+    cmyk_auto_fix: bool = False
+    """Per-file opt-in for the CMYK pipeline's TAC + force-K auto-fixes.
+
+    Default False = the pipeline only *detects* fine lines and TAC
+    overages and reports them in the audit sidecar / QA report. When
+    True, the Ghostscript flags ``-dBlackText=true -dBlackVector=true``
+    are added so exact-black text and vectors land on the K plate.
+    """
     updated_at: str = ""
     notes: str = ""
 
@@ -97,6 +105,7 @@ class IllustrationMapping:
             overrides={str(k).upper(): str(v).upper() for k, v in overrides_raw.items()},
             cmyk_status=_coerce_status(raw.get("cmyk_status", "pending")),
             cmyk_overrides={str(k).upper(): str(v).upper() for k, v in cmyk_raw.items()},
+            cmyk_auto_fix=bool(raw.get("cmyk_auto_fix", False)),
             updated_at=str(raw.get("updated_at", "")),
             notes=str(raw.get("notes", "")),
         )

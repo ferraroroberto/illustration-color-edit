@@ -23,14 +23,17 @@ from common import (
     color_sort_key,
     color_swatch,
     fresh_mapper,
+    load_semantic_palette,
     open_in_explorer,
     render_inline_svg,
     status_badge,
 )
 from src.color_mapper import MatchKind, gray_value, suggest_from_history
 from src.library_manager import LibraryManager
-from src.mapping_store import MappingStore, merge_mappings
+from src.mapping_store import MappingStore
 from src.print_safety import check_mapping
+from src.semantic_palette import merge_with_semantic
+from src.svg_parser import parse_svg
 from src.svg_writer import apply_mapping_with_report
 
 
@@ -94,6 +97,13 @@ def render() -> None:
         st.warning("No concrete colors found in this SVG (may be all `none`/`url(...)` references).")
         return
 
+    # Surface non-sRGB color-space hints if the parser found any. The
+    # full re-parse is cheap (file is already read by cached_color_extract)
+    # and only runs once per Streamlit rerun.
+    cs_warnings = parse_svg(svg_path).color_space_warnings
+    for w in cs_warnings:
+        st.warning(f"Color-space hint: {w}")
+
     global_map = store.load_global_map()
     mapper = fresh_mapper().with_overrides(illu.overrides)
     history = store.history()
@@ -117,7 +127,9 @@ def render() -> None:
         elif sug.target is not None:
             effective[src] = sug.target
 
-    full_mapping = merge_mappings(global_map, effective)
+    full_mapping = merge_with_semantic(
+        global_map, effective, load_semantic_palette(), "grayscale",
+    )
     converted_bytes, report = apply_mapping_with_report(svg_path, full_mapping)
 
     # ---- Action row above previews ----------------------------------------- #

@@ -185,3 +185,56 @@ def test_parse_svg_from_bytes_and_path(tmp_path):
     c = parse_svg(INLINE_SVG)
 
     assert set(a.colors) == set(b.colors) == set(c.colors)
+
+
+# --------------------------------------------------------------------------- #
+# Color-space warnings (sRGB assertion)
+# --------------------------------------------------------------------------- #
+class TestColorSpaceWarnings:
+    def test_default_svg_has_no_warnings(self):
+        parsed = parse_svg(INLINE_SVG)
+        assert parsed.color_space_warnings == []
+
+    def test_color_interpolation_linearrgb_attr_warns(self):
+        svg = textwrap.dedent("""\
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">
+              <rect width="10" height="10" fill="#E74C3C"
+                    color-interpolation="linearRGB"/>
+            </svg>
+        """)
+        parsed = parse_svg(svg)
+        assert any("color-interpolation" in w for w in parsed.color_space_warnings)
+        assert any("linearrgb" in w.lower() for w in parsed.color_space_warnings)
+
+    def test_color_interpolation_filters_in_style_warns(self):
+        svg = textwrap.dedent("""\
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">
+              <rect width="10" height="10" fill="#E74C3C"
+                    style="color-interpolation-filters: linearRGB"/>
+            </svg>
+        """)
+        parsed = parse_svg(svg)
+        assert any("color-interpolation-filters" in w for w in parsed.color_space_warnings)
+
+    def test_color_interpolation_auto_or_srgb_does_not_warn(self):
+        svg = textwrap.dedent("""\
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">
+              <rect width="10" height="10" fill="#E74C3C"
+                    color-interpolation="auto"/>
+              <rect width="10" height="10" fill="#46AA3A"
+                    color-interpolation="sRGB"/>
+            </svg>
+        """)
+        parsed = parse_svg(svg)
+        assert parsed.color_space_warnings == []
+
+    def test_color_profile_element_warns(self):
+        svg = textwrap.dedent("""\
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">
+              <color-profile name="cmyk-profile" xlink:href="profile.icc"
+                             xmlns:xlink="http://www.w3.org/1999/xlink"/>
+              <rect width="10" height="10" fill="#E74C3C"/>
+            </svg>
+        """)
+        parsed = parse_svg(svg)
+        assert any("color-profile" in w for w in parsed.color_space_warnings)

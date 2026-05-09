@@ -31,13 +31,20 @@ from typing import Optional
 from .cmyk_convert import build_gs_command
 from .cmyk_pipeline import CmykContext, process_one
 from .color_mapper import ColorMapper, MatchKind
-from .config import AppConfig, configure_logging, load_config
+from .config import PROJECT_ROOT, AppConfig, configure_logging, load_config
 from .library_manager import LibraryEntry, LibraryManager
-from .mapping_store import MappingStore, merge_mappings
+from .mapping_store import MappingStore
 from .print_safety import SafetyWarning, check_mapping
+from .delivery import create_snapshot
 from .qa_report import write_report
+from .semantic_palette import SemanticPaletteStore, merge_with_semantic
 from .svg_parser import parse_svg
 from .svg_writer import write_converted_svg
+
+
+def _load_semantic_palette():
+    """Load the project-level semantic palette (or empty if file missing)."""
+    return SemanticPaletteStore(PROJECT_ROOT / "semantic-palette.json").load()
 
 log = logging.getLogger("color_edit.cli")
 
@@ -132,6 +139,11 @@ def cmd_inspect(args: argparse.Namespace, cfg: AppConfig) -> int:
     mapper = ColorMapper(global_map=store.load_global_map(), matching=cfg.matching)
     mapper = mapper.with_overrides(illu.overrides)
 
+    if parsed.color_space_warnings:
+        print(f"{path.name}: color-space hints:")
+        for w in parsed.color_space_warnings:
+            print(f"  ! {w}")
+        print()
     print(f"{path.name}: {parsed.unique_color_count} unique colors")
     print(f"{'SOURCE':<10} {'COUNT':>5}  {'KIND':<6}  {'TARGET':<10}  DETAILS")
     for src in sorted(parsed.colors, key=lambda h: -parsed.colors[h].count):
@@ -201,7 +213,9 @@ def _convert_one(
     force: bool,
 ) -> None:
     illu = store.load_illustration(entry.filename)
-    merged = merge_mappings(global_map, illu.overrides)
+    merged = merge_with_semantic(
+        global_map, illu.overrides, _load_semantic_palette(), "grayscale",
+    )
 
     parsed = parse_svg(entry.path)
     unmapped_here = [h for h in parsed.colors if h not in merged]
@@ -284,9 +298,17 @@ def cmd_cmyk_inspect(args: argparse.Namespace, cfg: AppConfig) -> int:
         print(f"{path.name}: no concrete colors found.")
         return 0
 
+    if parsed.color_space_warnings:
+        print(f"{path.name}: color-space hints:")
+        for w in parsed.color_space_warnings:
+            print(f"  ! {w}")
+        print()
+
     illu = store.load_illustration(path.name)
     cmyk_global = store.load_cmyk_correction_map()
-    merged = merge_mappings(cmyk_global, illu.cmyk_overrides)
+    merged = merge_with_semantic(
+        cmyk_global, illu.cmyk_overrides, _load_semantic_palette(), "cmyk",
+    )
     mapper = ColorMapper(global_map=cmyk_global, matching=cfg.matching).with_overrides(
         illu.cmyk_overrides
     )
@@ -358,6 +380,11 @@ def cmd_cmyk_convert(args: argparse.Namespace, cfg: AppConfig) -> int:
         return 0
 
     cmyk_global = store.load_cmyk_correction_map()
+    template = (
+        args.filename_template
+        if args.filename_template is not None
+        else cfg.cmyk_export.filename_template
+    )
     ctx = CmykContext(
         output_dir=cfg.cmyk_export.output_dir,
         icc_profile=cfg.cmyk_export.icc_profile_path,
@@ -370,6 +397,13 @@ def cmd_cmyk_convert(args: argparse.Namespace, cfg: AppConfig) -> int:
         generate_preview=cfg.cmyk_export.generate_preview_png,
         preview_dpi=cfg.cmyk_export.preview_dpi,
         audit_artifacts=cfg.cmyk_export.audit_artifacts,
+        filename_template=template,
+        tac_limit_percent=cfg.cmyk_export.tac_limit_percent,
+        tac_check_dpi=cfg.cmyk_export.tac_check_dpi,
+        force_k_min_stroke_pt=cfg.cmyk_export.force_k_min_stroke_pt,
+        force_k_min_text_pt=cfg.cmyk_export.force_k_min_text_pt,
+        safety_inches=cfg.cmyk_export.safety_inches,
+        show_guide_overlay=cfg.cmyk_export.show_guide_overlay,
     )
 
     if args.dry_run:
@@ -411,10 +445,15 @@ def cmd_cmyk_convert(args: argparse.Namespace, cfg: AppConfig) -> int:
 
     failed = 0
     t0 = _time.time()
+    from dataclasses import replace as _replace
+    sem = _load_semantic_palette()
     for entry in entries:
         illu = store.load_illustration(entry.filename)
-        merged = merge_mappings(cmyk_global, illu.cmyk_overrides)
-        r = process_one(entry.path, merged, ctx)
+        merged = merge_with_semantic(
+            cmyk_global, illu.cmyk_overrides, sem, "cmyk",
+        )
+        per_ctx = _replace(ctx, apply_auto_fix=illu.cmyk_auto_fix)
+        r = process_one(entry.path, merged, per_ctx)
         report.files.append(r)
         if r.status == "ok":
             illu.with_cmyk_status("exported")
@@ -489,6 +528,27 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true",
         help="Don't run conversion; print plan and Ghostscript command.",
     )
+    p_cmyk_convert.add_argument(
+        "--filename-template", default=None, dest="filename_template",
+        help=(
+            "Override cmyk_export.filename_template for this run. "
+            "Supports {stem}, {chapter}, {figure} (also {chapter:02d}), "
+            "{description}, {slug}. Empty/unset = '<stem>_CMYK.pdf' default."
+        ),
+    )
+
+    p_deliver = sub.add_parser(
+        "deliver",
+        help="Snapshot the current CMYK output + project config into deliveries/.",
+    )
+    p_deliver.add_argument(
+        "--label", required=True,
+        help="Human-readable label, e.g. 'acme-2026-05'. Slugified for the directory.",
+    )
+    p_deliver.add_argument(
+        "--pattern", default="*_CMYK.pdf",
+        help="Glob within the CMYK output directory. Default: '*_CMYK.pdf'.",
+    )
     return p
 
 
@@ -512,8 +572,26 @@ def main(argv: Optional[list[str]] = None) -> int:
         return cmd_cmyk_inspect(args, cfg)
     if args.command == "cmyk-convert":
         return cmd_cmyk_convert(args, cfg)
+    if args.command == "deliver":
+        return cmd_deliver(args, cfg)
     parser.error(f"Unknown command: {args.command}")
     return 2  # unreachable
+
+
+def cmd_deliver(args: argparse.Namespace, cfg: AppConfig) -> int:
+    target = create_snapshot(
+        label=args.label,
+        project_root=PROJECT_ROOT,
+        output_dir=cfg.cmyk_export.output_dir,
+        pdf_pattern=args.pattern,
+        icc_profile=str(cfg.cmyk_export.icc_profile_path),
+        pdfx=cfg.cmyk_export.pdfx_compliance,
+        width_inches=cfg.cmyk_export.target_width_inches,
+        height_inches=cfg.cmyk_export.target_height_inches,
+        bleed_inches=cfg.cmyk_export.bleed_inches,
+    )
+    print(f"Delivery snapshot: {target}")
+    return 0
 
 
 if __name__ == "__main__":

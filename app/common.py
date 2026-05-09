@@ -17,9 +17,13 @@ from pathlib import Path
 import streamlit as st
 
 from src.color_mapper import ColorMapper, hex_to_lab
+from src.config import PROJECT_ROOT
 from src.mapping_store import MappingStore
 from src.palette import HUE_FAMILIES, hue_family
+from src.semantic_palette import SemanticPalette, SemanticPaletteStore
 from src.svg_parser import parse_svg
+
+SEMANTIC_PALETTE_PATH = PROJECT_ROOT / "semantic-palette.json"
 
 log = logging.getLogger(__name__)
 
@@ -149,6 +153,44 @@ def color_swatch(hex_color: str, size: int = 22) -> str:
     )
 
 
+def numeric_metric_cell(
+    value: float | None,
+    *,
+    thresholds: tuple[float, float] = (2.0, 5.0),
+    suffix: str = "",
+    fmt: str = "{:.1f}",
+) -> str:
+    """Render a numeric value as a colored badge for inline-HTML cells.
+
+    Used to show CIE ΔE between a swatch's source and its printed-appearance
+    in the Palette tab. ``thresholds`` is ``(green_max, yellow_max)``:
+
+      * ``value <= thresholds[0]`` → green (imperceptible / safe).
+      * ``value <= thresholds[1]`` → yellow (perceptible — review).
+      * ``value > thresholds[1]``  → red (clear shift — flag).
+      * ``value is None``          → neutral grey "—".
+    """
+    if value is None:
+        return (
+            '<span style="display:inline-block;padding:1px 6px;'
+            'background:#E5E7EB;color:#6B7280;border-radius:8px;'
+            'font-size:0.78em;">—</span>'
+        )
+    g_max, y_max = thresholds
+    if value <= g_max:
+        bg, fg = "#10B981", "#FFFFFF"
+    elif value <= y_max:
+        bg, fg = "#F59E0B", "#FFFFFF"
+    else:
+        bg, fg = "#EF4444", "#FFFFFF"
+    text = fmt.format(value) + (f" {suffix}" if suffix else "")
+    return (
+        f'<span style="display:inline-block;padding:1px 6px;'
+        f'background:{bg};color:{fg};border-radius:8px;'
+        f'font-size:0.78em;font-variant-numeric:tabular-nums;">{text}</span>'
+    )
+
+
 _STATUS_COLORS = {
     "pending": "#9CA3AF",
     "in_progress": "#F59E0B",
@@ -194,3 +236,21 @@ def fresh_mapper() -> ColorMapper:
     cfg = st.session_state.config
     store: MappingStore = st.session_state.store
     return ColorMapper(global_map=store.load_global_map(), matching=cfg.matching)
+
+
+def semantic_palette_store() -> SemanticPaletteStore:
+    """Return the session-cached :class:`SemanticPaletteStore`.
+
+    Loaded lazily into ``st.session_state`` so every tab gets the same
+    instance and disk reads stay cheap. The store is just a path
+    wrapper; the palette itself is loaded fresh via ``store.load()``
+    each render so cross-tab edits show up without manual refreshes.
+    """
+    if "semantic_store" not in st.session_state:
+        st.session_state.semantic_store = SemanticPaletteStore(SEMANTIC_PALETTE_PATH)
+    return st.session_state.semantic_store
+
+
+def load_semantic_palette() -> SemanticPalette:
+    """Convenience: load the current semantic palette from disk."""
+    return semantic_palette_store().load()
