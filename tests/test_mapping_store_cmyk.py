@@ -184,3 +184,131 @@ def test_cleanup_identity_entries_noop_when_clean(store):
     store.save_illustration(a)
     report = store.cleanup_identity_entries()
     assert report == {"global": 0, "files": 0, "metadata_files_touched": 0}
+
+
+# --------------------------------------------------------------------------- #
+# Generalized cleanup_identity_entries: pipeline=grayscale|cmyk|both
+# --------------------------------------------------------------------------- #
+def test_cleanup_identity_entries_grayscale_only(store):
+    """``pipeline='grayscale'`` cleans the gray side only; CMYK stays put."""
+    store.upsert_global_entry("#FFFFFF", "#FFFFFF", label="gray identity")
+    store.upsert_cmyk_correction_entry("#000000", "#000000", label="cmyk identity")
+    a = IllustrationMapping(
+        filename="a.svg",
+        overrides={"#AAAAAA": "#AAAAAA", "#FF0000": "#222222"},
+        cmyk_overrides={"#BBBBBB": "#BBBBBB"},
+    )
+    store.save_illustration(a)
+
+    report = store.cleanup_identity_entries(pipeline="grayscale")
+    assert report["global"] == 1
+    assert report["files"] == 1
+    assert report["metadata_files_touched"] == 1
+
+    gm_gray = store.load_global_map()
+    gm_cmyk = store.load_cmyk_correction_map()
+    assert "#FFFFFF" not in gm_gray
+    assert "#000000" in gm_cmyk  # cmyk identity left alone
+
+    a_clean = store.load_illustration("a.svg")
+    assert a_clean.overrides == {"#FF0000": "#222222"}
+    assert a_clean.cmyk_overrides == {"#BBBBBB": "#BBBBBB"}  # untouched
+
+
+def test_cleanup_identity_entries_both_pipelines(store):
+    store.upsert_global_entry("#FFFFFF", "#FFFFFF")
+    store.upsert_cmyk_correction_entry("#111111", "#111111")
+    a = IllustrationMapping(
+        filename="a.svg",
+        overrides={"#AAAAAA": "#AAAAAA"},
+        cmyk_overrides={"#BBBBBB": "#BBBBBB"},
+    )
+    store.save_illustration(a)
+
+    report = store.cleanup_identity_entries(pipeline="both")
+    assert report["global"] == 2
+    assert report["files"] == 2
+    assert report["metadata_files_touched"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# wipe_pipeline (Library multi-select)
+# --------------------------------------------------------------------------- #
+def test_wipe_pipeline_grayscale_clears_only_gray_state(store):
+    a = IllustrationMapping(
+        filename="a.svg",
+        status="reviewed",
+        overrides={"#FF0000": "#222222"},
+        cmyk_status="reviewed",
+        cmyk_overrides={"#000000": "#0A0A0A"},
+    )
+    store.save_illustration(a)
+
+    n = store.wipe_pipeline(["a.svg"], "grayscale")
+    assert n == 1
+
+    a2 = store.load_illustration("a.svg")
+    assert a2.status == "pending"
+    assert a2.overrides == {}
+    assert a2.cmyk_status == "reviewed"  # untouched
+    assert a2.cmyk_overrides == {"#000000": "#0A0A0A"}  # untouched
+
+
+def test_wipe_pipeline_cmyk_clears_only_cmyk_state(store):
+    a = IllustrationMapping(
+        filename="a.svg",
+        status="reviewed",
+        overrides={"#FF0000": "#222222"},
+        cmyk_status="reviewed",
+        cmyk_overrides={"#000000": "#0A0A0A"},
+    )
+    store.save_illustration(a)
+
+    n = store.wipe_pipeline(["a.svg"], "cmyk")
+    assert n == 1
+
+    a2 = store.load_illustration("a.svg")
+    assert a2.status == "reviewed"  # untouched
+    assert a2.overrides == {"#FF0000": "#222222"}  # untouched
+    assert a2.cmyk_status == "pending"
+    assert a2.cmyk_overrides == {}
+
+
+def test_wipe_pipeline_deletes_metadata_when_both_sides_empty(store):
+    """Wiping the only pipeline that had data removes the empty stub file."""
+    a = IllustrationMapping(
+        filename="a.svg",
+        cmyk_status="reviewed",
+        cmyk_overrides={"#000000": "#0A0A0A"},
+    )
+    store.save_illustration(a)
+    assert store.metadata_path_for("a.svg").is_file()
+
+    n = store.wipe_pipeline(["a.svg"], "cmyk")
+    assert n == 1
+    assert not store.metadata_path_for("a.svg").is_file()
+
+
+def test_wipe_pipeline_skips_files_without_metadata(store):
+    n = store.wipe_pipeline(["nonexistent.svg"], "grayscale")
+    assert n == 0
+
+
+def test_wipe_pipeline_validates_pipeline_argument(store):
+    with pytest.raises(ValueError):
+        store.wipe_pipeline(["a.svg"], "invalid")  # type: ignore[arg-type]
+
+
+def test_wipe_pipeline_preserves_notes(store):
+    """A file with notes is information-bearing — keep it even after wipe."""
+    a = IllustrationMapping(
+        filename="a.svg",
+        cmyk_overrides={"#000000": "#0A0A0A"},
+        notes="manual note from editor",
+    )
+    store.save_illustration(a)
+
+    store.wipe_pipeline(["a.svg"], "cmyk")
+    assert store.metadata_path_for("a.svg").is_file()
+    a2 = store.load_illustration("a.svg")
+    assert a2.notes == "manual note from editor"

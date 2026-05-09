@@ -1,15 +1,29 @@
-"""Editor tab — side-by-side preview and per-color mapping with suggestions."""
+"""Editor tab — side-by-side preview and per-color mapping with suggestions.
+
+Mirrors the CMYK Editor's correctness behaviors:
+
+* Save flows strip identity picks (``target == source``) and any pick
+  that already matches the global map's target — those are pure noise
+  in per-file ``overrides``.
+* Per-row **↺ reset** button clears that color's per-file override and
+  its global-map entry in one click.
+* Action row above the previews exposes the output folder.
+
+Print-safety / luminance hints stay grayscale-only; CMYK soft-proof and
+gamut warnings are CMYK-only.
+"""
 
 from __future__ import annotations
-
-import re
 
 import streamlit as st
 
 from common import (
+    apply_hex_input,
     cached_color_extract,
+    color_sort_key,
     color_swatch,
     fresh_mapper,
+    open_in_explorer,
     render_inline_svg,
     status_badge,
 )
@@ -19,19 +33,34 @@ from src.mapping_store import MappingStore, merge_mappings
 from src.print_safety import check_mapping
 from src.svg_writer import apply_mapping_with_report
 
-_HEX_RE = re.compile(r"^#?([0-9A-Fa-f]{6})$")
 
+def _persistable_overrides(
+    picks: dict[str, str],
+    global_map: dict[str, dict[str, str]],
+) -> dict[str, str]:
+    """Filter picks down to entries that genuinely override the global map.
 
-def _normalize_hex(raw: str) -> str | None:
-    m = _HEX_RE.match(raw.strip())
-    return f"#{m.group(1).upper()}" if m else None
+    Drops two cases that should never live in per-file ``overrides``:
 
+      * **Identity** — ``target == source``. The grayscale writer rewrites
+        a color to itself, which is a no-op but pollutes history dropdowns.
+      * **Already-global** — ``target == global_color_map[source].target``.
+        The global map already steers this color to the same place, so a
+        per-file entry is pure duplication.
 
-def _apply_hex_input(hk: str, pk: str) -> None:
-    """on_change callback: push a valid hex from the text input into the color picker."""
-    normalized = _normalize_hex(st.session_state.get(hk, ""))
-    if normalized:
-        st.session_state[pk] = normalized
+    Mirrors the CMYK editor's helper of the same name.
+    """
+    out: dict[str, str] = {}
+    for src, tgt in picks.items():
+        src_u = src.upper()
+        tgt_u = tgt.upper()
+        if tgt_u == src_u:
+            continue
+        global_target = global_map.get(src_u, {}).get("target", "").upper()
+        if tgt_u == global_target:
+            continue
+        out[src_u] = tgt_u
+    return out
 
 
 def render() -> None:
@@ -66,6 +95,7 @@ def render() -> None:
         st.warning("No concrete colors found in this SVG (may be all `none`/`url(...)` references).")
         return
 
+    global_map = store.load_global_map()
     mapper = fresh_mapper().with_overrides(illu.overrides)
     history = store.history()
 
@@ -88,8 +118,14 @@ def render() -> None:
         elif sug.target is not None:
             effective[src] = sug.target
 
-    full_mapping = merge_mappings(store.load_global_map(), effective)
+    full_mapping = merge_mappings(global_map, effective)
     converted_bytes, report = apply_mapping_with_report(svg_path, full_mapping)
+
+    # ---- Action row above previews ----------------------------------------- #
+    btn_open, _spacer = st.columns([1, 5])
+    if btn_open.button("📂 Open output folder", key="ed_open_out", width="stretch"):
+        ok, msg = open_in_explorer(cfg.paths.output_dir)
+        (st.success if ok else st.error)(msg)
 
     left, right = st.columns(2)
     with left:
@@ -108,11 +144,20 @@ def render() -> None:
     safety_warnings = check_mapping(effective, cfg.print_safety)
     safety_targets = {w.target for w in safety_warnings}
 
-    sorted_colors = sorted(colors.items(), key=lambda kv: -kv[1])
-    for src_hex, count in sorted_colors:
+    # Group rows by hue family then lightness — all reds together, then
+    # oranges, …, neutrals last. Count is no longer the primary key (it
+    # produced a salt-and-pepper order across the page).
+    sorted_colors = sorted(colors.items(), key=lambda kv: color_sort_key(kv[0]))
+    for idx, (src_hex, count) in enumerate(sorted_colors):
         sug = suggestions[src_hex]
         history_picks = suggest_from_history(src_hex, history)
-        with st.container(border=True):
+        if idx > 0:
+            st.markdown(
+                "<hr style='margin:4px 0;border:none;"
+                "border-top:1px solid rgba(255,255,255,0.08);'>",
+                unsafe_allow_html=True,
+            )
+        with st.container():
             # col weights: source | match | picker | hex-input | history | safety
             row = st.columns([1, 2, 1, 2, 3, 2])
             row[0].markdown(
@@ -133,7 +178,44 @@ def render() -> None:
             else:
                 badge = "<span style='color:#EF4444'>● none</span>"
                 detail = "no exact or near match"
-            row[1].markdown(f"{badge}<br><small>{detail}</small>", unsafe_allow_html=True)
+            # Reset: clear all mappings for this color — both per-file
+            # override and the project-wide global_color_map entry. Mirrors
+            # the CMYK editor's reset behavior.
+            has_override = src_hex in illu.overrides
+            has_global = src_hex in global_map
+            badge_col, reset_col = row[1].columns([2, 1])
+            badge_col.markdown(
+                f"{badge}<br><small>{detail}</small>", unsafe_allow_html=True
+            )
+            if has_override or has_global:
+                scope = (
+                    "override + global" if has_override and has_global
+                    else "override" if has_override
+                    else "global"
+                )
+                if reset_col.button(
+                    "↺ reset",
+                    key=f"ed_reset_{current}_{src_hex}",
+                    help=(
+                        f"Clear all mappings for this color ({scope}). "
+                        "It will fall back to suggestion / no mapping."
+                    ),
+                ):
+                    if has_override:
+                        del illu.overrides[src_hex]
+                        store.save_illustration(illu)
+                    if has_global:
+                        store.remove_global_entry(src_hex)
+                    for k in (
+                        f"pick_{current}_{src_hex}",
+                        f"hex_{current}_{src_hex}",
+                        f"hist_{current}_{src_hex}",
+                    ):
+                        st.session_state.pop(k, None)
+                    saved = dict(st.session_state.editor_picks)
+                    saved.pop(src_hex, None)
+                    st.session_state.editor_picks = saved
+                    st.rerun()
 
             pick_key = f"pick_{current}_{src_hex}"
             hex_key = f"hex_{current}_{src_hex}"
@@ -169,7 +251,7 @@ def render() -> None:
                 "hex",
                 key=hex_key,
                 label_visibility="collapsed",
-                on_change=_apply_hex_input,
+                on_change=apply_hex_input,
                 args=(hex_key, pick_key),
             )
 
@@ -197,14 +279,18 @@ def render() -> None:
 
     st.session_state.editor_picks = picks
 
+    # Persist only picks that genuinely override — drop identities and
+    # picks that already match the current global map. Mirrors CMYK editor.
+    real_picks = _persistable_overrides(picks, global_map)
+
     st.divider()
     a1, a2, a3, a4 = st.columns([1, 1, 1, 3])
     if a1.button("Save (keep status)", key="ed_save", width="content"):
-        illu.overrides = {k.upper(): v.upper() for k, v in picks.items()}
+        illu.overrides = dict(real_picks)
         store.save_illustration(illu)
         st.success(f"Saved {len(illu.overrides)} overrides for {current}.")
     if a2.button("Save & mark reviewed", key="ed_review", width="content", type="primary"):
-        illu.overrides = {k.upper(): v.upper() for k, v in picks.items()}
+        illu.overrides = dict(real_picks)
         illu.with_status("reviewed")
         store.save_illustration(illu)
         gm = store.load_global_map()
@@ -217,9 +303,9 @@ def render() -> None:
             f"Saved & marked reviewed. {new_global} new entries promoted to the global map."
         )
     if a3.button("Promote ALL picks to global", key="ed_promote", width="content"):
-        for src, tgt in picks.items():
+        for src, tgt in real_picks.items():
             store.upsert_global_entry(src, tgt, label="manual promote", notes="")
-        st.success(f"Promoted {len(picks)} entries to the global map.")
+        st.success(f"Promoted {len(real_picks)} entries to the global map.")
 
     if report.unmapped:
         a4.warning(

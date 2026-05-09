@@ -9,17 +9,59 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 import streamlit as st
 
-from src.color_mapper import ColorMapper
+from src.color_mapper import ColorMapper, hex_to_lab
 from src.mapping_store import MappingStore
+from src.palette import HUE_FAMILIES, hue_family
 from src.svg_parser import parse_svg
 
 log = logging.getLogger(__name__)
+
+
+# --------------------------------------------------------------------------- #
+# Hex parsing helpers (shared by both Editor tabs)
+# --------------------------------------------------------------------------- #
+_HEX_RE = re.compile(r"^#?([0-9A-Fa-f]{6})$")
+
+
+def normalize_hex(raw: str) -> str | None:
+    """Return canonical ``#RRGGBB`` (uppercase) or ``None`` if invalid."""
+    m = _HEX_RE.match(raw.strip())
+    return f"#{m.group(1).upper()}" if m else None
+
+
+def apply_hex_input(hk: str, pk: str) -> None:
+    """``on_change`` callback: copy a valid hex from a text input into a color picker.
+
+    Used by both editors so users can type ``#3F8B5A`` into the small
+    text field and have the adjacent ``st.color_picker`` follow.
+    """
+    normalized = normalize_hex(st.session_state.get(hk, ""))
+    if normalized:
+        st.session_state[pk] = normalized
+
+
+_FAMILY_INDEX = {f: i for i, f in enumerate(HUE_FAMILIES)}
+
+
+def color_sort_key(hex_color: str) -> tuple[int, float, float, float]:
+    """Sort key that groups colors by hue family, then by lightness.
+
+    Used to order the per-color rows in both editors so all reds sit
+    together, all whites together, etc. Family order matches
+    :data:`src.palette.HUE_FAMILIES` (red → orange → yellow → green →
+    cyan → blue → purple → neutral). Within a family, sort by Lab L*
+    (dark to light) and then by chroma to break ties deterministically.
+    """
+    family = hue_family(hex_color)
+    L, a, b = hex_to_lab(hex_color)
+    return (_FAMILY_INDEX.get(family, len(HUE_FAMILIES)), L, a, b)
 
 
 # --------------------------------------------------------------------------- #
@@ -104,6 +146,43 @@ def color_swatch(hex_color: str, size: int = 22) -> str:
         f'<span style="display:inline-block;width:{size}px;height:{size}px;'
         f'background:{hex_color};border:1px solid #aaa;border-radius:3px;'
         f'vertical-align:middle;"></span>'
+    )
+
+
+_STATUS_COLORS = {
+    "pending": "#9CA3AF",
+    "in_progress": "#F59E0B",
+    "reviewed": "#10B981",
+    "exported": "#3B82F6",
+}
+
+
+def compact_status_counters(label: str, counts: dict[str, int]) -> str:
+    """Compact one-line "label  ● 0  ● 1  ● 0  ● 0" status counter row.
+
+    Replaces the older pill-badge layout that wrapped awkwardly in narrow
+    columns. Each status is a small colored dot followed by its count;
+    statuses sit on a single non-wrapping line via ``white-space:nowrap``.
+    """
+    parts = [
+        f'<span style="font-weight:600;margin-right:10px;">{label}</span>'
+    ]
+    for status in ("pending", "in_progress", "reviewed", "exported"):
+        c = _STATUS_COLORS[status]
+        parts.append(
+            f'<span style="margin-right:14px;white-space:nowrap;" '
+            f'title="{status}">'
+            f'<span style="display:inline-block;width:8px;height:8px;'
+            f'border-radius:50%;background:{c};margin-right:5px;'
+            f'vertical-align:middle;"></span>'
+            f'<span style="color:#cfcfcf;font-size:0.85em;">{status}</span>'
+            f'<span style="margin-left:6px;font-variant-numeric:tabular-nums;">'
+            f'{counts.get(status, 0)}</span>'
+            f'</span>'
+        )
+    return (
+        f'<div style="display:flex;flex-wrap:wrap;align-items:center;'
+        f'line-height:1.8;">{"".join(parts)}</div>'
     )
 
 

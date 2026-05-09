@@ -216,11 +216,22 @@ or
 The app has nine sidebar destinations, organised as: Library | grayscale
 pipeline (4 tabs) | CMYK pipeline (4 tabs).
 
-1. **Library** — list all SVGs in `input/` with grayscale status badges
-   (`pending` / `in_progress` / `reviewed` / `exported`). Click to open.
+1. **Library** — table of every SVG in `input/` with both grayscale and
+   CMYK status columns. Multi-row selection drives the action bar:
+   *Open* (single selection), *Wipe grayscale (N)*, *Wipe CMYK (N)*. The
+   *Wipe ALL* expander below clears per-file config across the whole
+   library for one pipeline at a time (gated by a confirm checkbox).
+   Wipes clear per-file `overrides` + reset that pipeline's status to
+   `pending`; the other pipeline and the global maps are left alone.
+   Metadata files that end up empty for both pipelines are deleted so
+   `metadata/` stays clean.
 2. **Editor** — grayscale per-illustration editor. Side-by-side original vs.
-   converted live preview, per-color picker with history suggestions,
-   save / mark-reviewed.
+   converted live preview, per-color picker with history suggestions, a
+   per-row **↺ reset** that clears that color's per-file override and its
+   global-map entry in one click, and an *Open output folder* shortcut.
+   Save flows drop identity picks (`target == source`) and picks that
+   already match the global map — they're pure noise in per-file
+   overrides.
 3. **Global Map** — view and edit the grayscale global registry. Usage counts.
 4. **Batch Export** — batch grayscale: writes `<name>_grayscale.svg` and (when
    enabled) `<name>_grayscale.png` at the configured DPI into `output/`.
@@ -252,6 +263,27 @@ pipeline (4 tabs) | CMYK pipeline (4 tabs).
    PDF/X-1a, soft-proof DPI, audit-sidecars toggle. Also exposes a
    *Maintenance → Clean identity entries from all CMYK metadata* button,
    useful as a one-shot cleanup for files written by older save flows.
+
+The grayscale **Settings** tab mirrors this: read-only summary at the
+top, editable form for paths, PNG export, matching, and print safety
+(persisted to `config.json` / `color-config.json` respectively), and a
+matching *Clean identity entries from all grayscale metadata* button.
+
+### Two-step grayscale-then-CMYK workflow (no app changes needed)
+
+If you want CMYK PDFs that contain only black ink (pure-K), you can:
+
+1. Run the grayscale pipeline as usual — `output/<name>_grayscale.svg`
+   files contain only neutral grays.
+2. Temporarily point `paths.input_dir` at `./output` in `config.json`,
+   then run `cmyk-convert`. The ICC profile maps neutral RGB grays to
+   pure K under typical profiles (e.g. ISO Coated v2 ECI). Profiles
+   that simulate paper tone may add a faint chromatic tint — verify
+   with `gswin64c -o nul -sDEVICE=inkcov` if it matters.
+3. Restore `paths.input_dir` afterwards.
+
+No `cmyk_correction_map` entries fire on grayscale inputs — the source
+colors no longer match.
 
 ## CLI batch usage
 

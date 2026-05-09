@@ -32,6 +32,8 @@ class LibraryEntry:
     override_count: int
     has_metadata: bool
     notes: str = ""
+    cmyk_status: Status = "pending"
+    cmyk_override_count: int = 0
 
     @property
     def size_kb(self) -> float:
@@ -99,6 +101,8 @@ class LibraryManager:
             override_count=len(mapping.overrides),
             has_metadata=has_meta,
             notes=mapping.notes,
+            cmyk_status=mapping.cmyk_status,
+            cmyk_override_count=len(mapping.cmyk_overrides),
         )
 
     # ----- queries --------------------------------------------------------- #
@@ -116,6 +120,12 @@ class LibraryManager:
         counts: dict[str, int] = {"pending": 0, "in_progress": 0, "reviewed": 0, "exported": 0}
         for e in self.scan():
             counts[e.status] = counts.get(e.status, 0) + 1
+        return counts
+
+    def cmyk_status_counts(self) -> dict[str, int]:
+        counts: dict[str, int] = {"pending": 0, "in_progress": 0, "reviewed": 0, "exported": 0}
+        for e in self.scan():
+            counts[e.cmyk_status] = counts.get(e.cmyk_status, 0) + 1
         return counts
 
     # ----- mutations ------------------------------------------------------- #

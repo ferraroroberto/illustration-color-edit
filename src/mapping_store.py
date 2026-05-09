@@ -383,44 +383,126 @@ class MappingStore:
         return counts
 
     # ----- maintenance ----------------------------------------------------- #
-    def cleanup_identity_entries(self) -> dict[str, int]:
-        """Strip identity (``target == source``) entries from CMYK storage.
+    def cleanup_identity_entries(
+        self,
+        pipeline: Literal["grayscale", "cmyk", "both"] = "cmyk",
+    ) -> dict[str, int]:
+        """Strip identity (``target == source``) entries from one or both pipelines.
 
-        Walks every per-file ``cmyk_overrides`` block and the project-wide
-        ``cmyk_correction_map``, removing any entry that maps a color to
-        itself. Identity entries are no-op corrections — they take up
-        space, surface as misleading suggestions in the history dropdown,
-        and pollute "Replace globally" pre-flight counts. Older save flows
-        wrote them by accident; this is the one-shot migration to clean up.
+        Walks every per-file overrides block and the project-wide
+        global map(s), removing any entry that maps a color to itself.
+        Identity entries are no-op mappings — they take up space, surface
+        as misleading suggestions in the history dropdown, and pollute
+        "Replace globally" pre-flight counts.
+
+        ``pipeline`` controls which side(s) to clean: ``"grayscale"`` for
+        ``global_color_map`` + ``overrides``, ``"cmyk"`` for
+        ``cmyk_correction_map`` + ``cmyk_overrides``, or ``"both"``.
 
         Returns ``{"global": N, "files": M, "metadata_files_touched": K}``
-        with the counts of entries removed and metadata files rewritten.
+        with totals across the requested pipelines.
         """
         report = {"global": 0, "files": 0, "metadata_files_touched": 0}
+        do_gray = pipeline in ("grayscale", "both")
+        do_cmyk = pipeline in ("cmyk", "both")
 
-        # Global cmyk_correction_map.
-        gm = self.load_cmyk_correction_map()
-        cleaned_gm = {
-            k: v for k, v in gm.items()
-            if v.get("target", "").upper() != k.upper()
-        }
-        if len(cleaned_gm) != len(gm):
-            report["global"] = len(gm) - len(cleaned_gm)
-            self.save_cmyk_correction_map(cleaned_gm)
-
-        # Per-file cmyk_overrides.
-        for illu in self.all_illustrations():
-            cleaned = {
-                k: v for k, v in illu.cmyk_overrides.items()
-                if v.upper() != k.upper()
+        if do_gray:
+            gm = self.load_global_map()
+            cleaned_gm = {
+                k: v for k, v in gm.items()
+                if v.get("target", "").upper() != k.upper()
             }
-            removed = len(illu.cmyk_overrides) - len(cleaned)
-            if removed:
-                illu.cmyk_overrides = cleaned
+            if len(cleaned_gm) != len(gm):
+                report["global"] += len(gm) - len(cleaned_gm)
+                self.save_global_map(cleaned_gm)
+
+        if do_cmyk:
+            gm = self.load_cmyk_correction_map()
+            cleaned_gm = {
+                k: v for k, v in gm.items()
+                if v.get("target", "").upper() != k.upper()
+            }
+            if len(cleaned_gm) != len(gm):
+                report["global"] += len(gm) - len(cleaned_gm)
+                self.save_cmyk_correction_map(cleaned_gm)
+
+        for illu in self.all_illustrations():
+            touched = False
+            if do_gray:
+                cleaned = {
+                    k: v for k, v in illu.overrides.items()
+                    if v.upper() != k.upper()
+                }
+                removed = len(illu.overrides) - len(cleaned)
+                if removed:
+                    illu.overrides = cleaned
+                    report["files"] += removed
+                    touched = True
+            if do_cmyk:
+                cleaned = {
+                    k: v for k, v in illu.cmyk_overrides.items()
+                    if v.upper() != k.upper()
+                }
+                removed = len(illu.cmyk_overrides) - len(cleaned)
+                if removed:
+                    illu.cmyk_overrides = cleaned
+                    report["files"] += removed
+                    touched = True
+            if touched:
                 self.save_illustration(illu)
-                report["files"] += removed
                 report["metadata_files_touched"] += 1
         return report
+
+    # ----- bulk wipe (Library multi-select) -------------------------------- #
+    def wipe_pipeline(
+        self,
+        filenames: Iterable[str],
+        pipeline: Literal["grayscale", "cmyk"],
+    ) -> int:
+        """Clear per-file overrides + reset status for one pipeline.
+
+        For each filename: load metadata (no-op if missing), clear the
+        appropriate overrides dict and reset its status to ``"pending"``.
+        If after the wipe the *other* pipeline is also untouched (status
+        ``pending``, overrides empty, no notes), delete the metadata file
+        outright so ``metadata/`` doesn't accumulate empty stubs.
+
+        ``pipeline`` must be ``"grayscale"`` or ``"cmyk"``. The global
+        color/correction maps are intentionally not touched here — wiping
+        them is a separate, more destructive concern.
+
+        Returns the number of metadata files touched (rewritten or deleted).
+        """
+        if pipeline not in ("grayscale", "cmyk"):
+            raise ValueError(f"pipeline must be 'grayscale' or 'cmyk', got {pipeline!r}")
+        touched = 0
+        for fn in filenames:
+            path = self.metadata_path_for(fn)
+            if not path.is_file():
+                continue
+            illu = self.load_illustration(fn)
+            if pipeline == "grayscale":
+                illu.overrides = {}
+                illu.status = "pending"
+            else:
+                illu.cmyk_overrides = {}
+                illu.cmyk_status = "pending"
+            # If both pipelines are now empty + pending and there are no
+            # free-form notes, the metadata file carries no information —
+            # remove it so /metadata stays clean.
+            empty = (
+                not illu.overrides
+                and illu.status == "pending"
+                and not illu.cmyk_overrides
+                and illu.cmyk_status == "pending"
+                and not illu.notes
+            )
+            if empty:
+                path.unlink()
+            else:
+                self.save_illustration(illu)
+            touched += 1
+        return touched
 
 
 # --------------------------------------------------------------------------- #

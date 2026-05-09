@@ -18,12 +18,13 @@ Mirrors the grayscale Editor (``tab_editor.py``) in shape: same file picker
 from __future__ import annotations
 
 import base64
-import re
 
 import streamlit as st
 
 from common import (
+    apply_hex_input,
     cached_color_extract,
+    color_sort_key,
     color_swatch,
     open_in_explorer,
     render_inline_svg,
@@ -39,19 +40,6 @@ from src.svg_writer import apply_mapping_with_report
 # Lab ΔE76 above this is "noticeably different at a glance" — the user
 # probably wants to know before committing such a target.
 _GAMUT_WARN_THRESHOLD = 6.0
-
-_HEX_RE = re.compile(r"^#?([0-9A-Fa-f]{6})$")
-
-
-def _normalize_hex(raw: str) -> str | None:
-    m = _HEX_RE.match(raw.strip())
-    return f"#{m.group(1).upper()}" if m else None
-
-
-def _apply_hex_input(hk: str, pk: str) -> None:
-    normalized = _normalize_hex(st.session_state.get(hk, ""))
-    if normalized:
-        st.session_state[pk] = normalized
 
 
 def _persistable_overrides(
@@ -275,11 +263,19 @@ def render() -> None:
         f"### Color corrections — {len(colors)} source · {unique_dst} unique target"
     )
 
-    sorted_colors = sorted(colors.items(), key=lambda kv: -kv[1])
-    for src_hex, count in sorted_colors:
+    # Group rows by hue family then lightness — all reds together, then
+    # oranges, …, neutrals last.
+    sorted_colors = sorted(colors.items(), key=lambda kv: color_sort_key(kv[0]))
+    for idx, (src_hex, count) in enumerate(sorted_colors):
         sug = suggestions[src_hex]
         history_picks = suggest_from_history(src_hex, history)
-        with st.container(border=True):
+        if idx > 0:
+            st.markdown(
+                "<hr style='margin:4px 0;border:none;"
+                "border-top:1px solid rgba(255,255,255,0.08);'>",
+                unsafe_allow_html=True,
+            )
+        with st.container():
             # col weights: source | match | picker | hex-input | history | gamut
             row = st.columns([1, 2, 1, 2, 3, 2])
             row[0].markdown(
@@ -299,21 +295,23 @@ def render() -> None:
             else:
                 badge = "<span style='color:#9CA3AF'>● no correction</span>"
                 detail = "passes through unchanged"
-            row[1].markdown(f"{badge}<br><small>{detail}</small>", unsafe_allow_html=True)
-
             # Reset: clear all corrections for this color — both the per-file
             # override and the project-wide cmyk_correction_map entry. The
             # color then passes straight through to ICC with no pre-correction.
             # Shown when either source of correction exists for this color.
             has_override = src_hex in illu.cmyk_overrides
             has_global = src_hex in cmyk_global
+            badge_col, reset_col = row[1].columns([2, 1])
+            badge_col.markdown(
+                f"{badge}<br><small>{detail}</small>", unsafe_allow_html=True
+            )
             if has_override or has_global:
                 scope = (
                     "override + global" if has_override and has_global
                     else "override" if has_override
                     else "global"
                 )
-                if row[1].button(
+                if reset_col.button(
                     "↺ reset",
                     key=f"cmyk_reset_{current}_{src_hex}",
                     help=(
@@ -366,7 +364,7 @@ def render() -> None:
                 "hex",
                 key=hex_key,
                 label_visibility="collapsed",
-                on_change=_apply_hex_input,
+                on_change=apply_hex_input,
                 args=(hex_key, pick_key),
             )
             if history_picks:
