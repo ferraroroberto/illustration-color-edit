@@ -46,6 +46,17 @@ import tab_palette  # noqa: E402
 
 st.set_page_config(layout="wide", page_title="Illustration Color Edit")
 
+# Tighten the default top padding so the page header sits closer to the top.
+st.markdown(
+    """
+    <style>
+        .block-container { padding-top: 1.5rem; }
+        section[data-testid="stSidebar"] .block-container { padding-top: 1.5rem; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 
 def _bootstrap() -> None:
     """Initialize config + persistent stores once per session."""
@@ -97,10 +108,6 @@ _GROUPS: list[tuple[str, list[str]]] = [
 def _render_sidebar() -> str:
     """Render the grouped sidebar nav. Returns the active destination key."""
     with st.sidebar:
-        st.markdown("## Illustration Color Edit")
-        st.caption("SVG → grayscale + CMYK print pipeline")
-        st.divider()
-
         for header, keys in _GROUPS:
             st.markdown(f"**{header}**")
             for key in keys:
@@ -128,5 +135,5 @@ _group_for_active = next(
     (group for group, keys in _GROUPS if _active_key in keys),
     "",
 )
-st.title(f"{_group_for_active} · {_active_label}" if _group_for_active != "Library" else "Library")
+st.subheader(f"{_group_for_active} · {_active_label}" if _group_for_active != "Library" else "Library")
 _active_render()

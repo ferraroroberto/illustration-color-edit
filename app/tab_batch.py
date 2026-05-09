@@ -12,7 +12,6 @@ from src.svg_writer import apply_mapping_with_report, write_png_from_svg
 
 
 def render() -> None:
-    st.subheader("Batch export")
     library: LibraryManager = st.session_state.library
     store: MappingStore = st.session_state.store
     cfg = st.session_state.config

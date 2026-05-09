@@ -15,7 +15,6 @@ from src.mapping_store import MappingStore
 
 
 def render() -> None:
-    st.subheader("CMYK correction map")
     st.caption(
         "Project-wide RGB→RGB pre-corrections applied before the ICC profile "
         "converts to CMYK. Use this to nudge out-of-gamut colors into a "

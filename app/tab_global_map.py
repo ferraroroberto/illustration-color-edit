@@ -9,7 +9,6 @@ from src.mapping_store import MappingStore
 
 
 def render() -> None:
-    st.subheader("Global color map")
     store: MappingStore = st.session_state.store
 
     gm = store.load_global_map()
