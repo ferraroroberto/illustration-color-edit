@@ -47,6 +47,7 @@ from .force_k import FineLineReport, find_fine_lines
 from .svg_parser import _localname, parse_svg
 from .svg_to_pdf import InkscapeNotFoundError, SvgToPdfError, svg_to_pdf
 from .svg_writer import apply_mapping_with_report
+from .trim_to_content import TrimError, TrimReport, trim_svg_to_content
 
 log = logging.getLogger(__name__)
 
@@ -90,6 +91,13 @@ class CmykContext:
     runs in either case so the audit report stays accurate."""
     safety_inches: float = 0.1875
     show_guide_overlay: bool = True
+    trim_to_content_enabled: bool = False
+    """When True, the PDF page is cropped to the SVG's visible content
+    (replaces the fixed trim). ``width_inches`` / ``height_inches`` /
+    ``bleed_inches`` are bypassed for that file; guide overlay is
+    suppressed because there are no trim/bleed/safety margins to draw."""
+    trim_to_content_padding_pt: float = 0.0
+    """Padding (pt) added around the trimmed bbox on all sides."""
     # Cached at batch start so each file's report can record it without
     # spawning N extra `gs -v` subprocesses. Empty string = not yet probed.
     ghostscript_version: str = ""
@@ -119,6 +127,10 @@ class FileResult:
     fine_lines: Optional[FineLineReport] = None
     auto_fix_applied: bool = False
     """Whether the Ghostscript force-K flags were active for this file."""
+    trim: Optional[TrimReport] = None
+    """Trim-to-content result. ``None`` if trim wasn't attempted (toggle off).
+    ``trim.had_content == False`` means trim was attempted but the SVG had
+    no visible content and the file fell back to the configured trim."""
 
 
 @dataclass
@@ -278,6 +290,7 @@ def write_conversion_report(
     tac: Optional["TacReport"] = None,
     fine_lines: Optional["FineLineReport"] = None,
     auto_fix_applied: bool = False,
+    trim: Optional["TrimReport"] = None,
 ) -> Path:
     """Write a human-readable audit report for one CMYK conversion.
 
@@ -329,6 +342,23 @@ def write_conversion_report(
     else:
         tac_block = "  (not measured)"
 
+    if trim is not None:
+        if trim.had_content:
+            trim_block = (
+                f"  Mode:             enabled (page = artwork extent)\n"
+                f"  Original viewBox: {trim.original_viewbox or '(none)'}\n"
+                f"  Trimmed viewBox:  {trim.new_viewbox}\n"
+                f"  Final page:       {trim.width_in:.3f} x {trim.height_in:.3f} in\n"
+                f"  Padding:          {trim.padding_pt:.2f} pt"
+            )
+        else:
+            trim_block = (
+                "  Mode:             enabled, fell back to configured trim "
+                "(no visible content detected)"
+            )
+    else:
+        trim_block = "  Mode:             disabled (using configured trim)"
+
     if fine_lines is not None:
         fl_lines = [f"  Auto-fix applied: {'yes' if auto_fix_applied else 'no (detection only)'}"]
         fl_lines.append(f"  Fine strokes:     {fine_lines.stroke_count}")
@@ -361,6 +391,10 @@ Page geometry
 Trim:             {width_inches:.3f} x {height_inches:.3f} in
 Bleed:            {bleed_inches:.3f} in (each side)
 PDF MediaBox:     {page_w:.3f} x {page_h:.3f} in
+
+Trim-to-content
+---------------
+{trim_block}
 
 Pre-correction (RGB to RGB before Ghostscript)
 ----------------------------------------------
@@ -480,20 +514,56 @@ def process_one(
         result.replacements_by_source = dict(report.by_source)
         result.unmapped_colors = sorted(report.unmapped)
 
-        # 1b. Patch the SVG root with physical inches so Inkscape produces a
-        #     PDF at the correct page size (trim + bleed). Square art on a
-        #     5.5×7.5 page letterboxes via xMidYMid meet.
-        page_w = ctx.width_inches + 2 * ctx.bleed_inches
-        page_h = ctx.height_inches + 2 * ctx.bleed_inches
-        _apply_page_size(corrected_svg, page_w, page_h)
+        # 1b. Either trim the SVG to its visible content (overrides the
+        #     configured trim) or letterbox it inside the configured trim.
+        #
+        # The trim path bypasses ``_apply_page_size``: ``trim_svg_to_content``
+        # already wrote width/height in inches matching the artwork bbox,
+        # which is exactly what Inkscape needs to produce a page-sized-to-
+        # content PDF. Bleed is forced to 0 here because the publisher use
+        # case is "page = artwork extent"; the guide overlay is suppressed
+        # downstream for the same reason (no trim/bleed/safety to draw).
+        use_trim = False
+        page_w_in = ctx.width_inches
+        page_h_in = ctx.height_inches
+        bleed_in = ctx.bleed_inches
+        if ctx.trim_to_content_enabled:
+            try:
+                trim_report = trim_svg_to_content(
+                    corrected_svg, corrected_svg,
+                    padding_pt=ctx.trim_to_content_padding_pt,
+                    inkscape_exe=ctx.inkscape_exe,
+                )
+            except TrimError as exc:
+                # Inkscape bbox query failed — surface as a per-file warning
+                # and fall through to the configured trim so the batch keeps
+                # going on the remaining illustrations.
+                log.warning("trim-to-content failed for %s: %s", svg_path.name, exc)
+                result.warnings.append(f"trim-to-content failed: {exc}")
+                trim_report = None
+            result.trim = trim_report
+            if trim_report and trim_report.had_content:
+                use_trim = True
+                page_w_in = trim_report.width_in
+                page_h_in = trim_report.height_in
+                bleed_in = 0.0
+            elif trim_report is not None:
+                result.warnings.append(
+                    "trim-to-content: no visible content detected — "
+                    "fell back to configured trim size."
+                )
+        if not use_trim:
+            page_w = ctx.width_inches + 2 * ctx.bleed_inches
+            page_h = ctx.height_inches + 2 * ctx.bleed_inches
+            _apply_page_size(corrected_svg, page_w, page_h)
 
         # 2. SVG → RGB PDF.
         rgb_pdf = tmp / f"{stem}_rgb.pdf"
         svg_to_pdf(
             corrected_svg, rgb_pdf,
-            width_inches=ctx.width_inches,
-            height_inches=ctx.height_inches,
-            bleed_inches=ctx.bleed_inches,
+            width_inches=page_w_in,
+            height_inches=page_h_in,
+            bleed_inches=bleed_in,
             inkscape_exe=ctx.inkscape_exe,
         )
 
@@ -545,7 +615,9 @@ def process_one(
                     gs_exe=ctx.ghostscript_exe,
                 )
                 result.preview_png = preview
-                if ctx.show_guide_overlay:
+                # Skip guides when trim-to-content is active: there's no
+                # trim/bleed/safety to mark — the page IS the artwork.
+                if ctx.show_guide_overlay and not use_trim:
                     try:
                         composite_guides(
                             preview,
@@ -584,9 +656,9 @@ def process_one(
                 pdfx_def_ps=pdfx_def_ps if (ctx.pdfx and pdfx_def_ps.is_file()) else None,
                 icc_profile=ctx.icc_profile,
                 pdfx=ctx.pdfx,
-                width_inches=ctx.width_inches,
-                height_inches=ctx.height_inches,
-                bleed_inches=ctx.bleed_inches,
+                width_inches=page_w_in,
+                height_inches=page_h_in,
+                bleed_inches=bleed_in,
                 replacements=result.replacements,
                 replacements_by_source=result.replacements_by_source,
                 correction_map=correction_map,
@@ -601,6 +673,7 @@ def process_one(
                 tac=result.tac,
                 fine_lines=result.fine_lines,
                 auto_fix_applied=result.auto_fix_applied,
+                trim=result.trim,
             )
             result.report_txt = report_path
 
@@ -656,6 +729,8 @@ def soft_proof_one(
         audit_artifacts=False,
         tmp_dir=scratch / "_tmp",
         ghostscript_version=ctx.ghostscript_version,
+        trim_to_content_enabled=ctx.trim_to_content_enabled,
+        trim_to_content_padding_pt=ctx.trim_to_content_padding_pt,
     )
     return process_one(svg_path, correction_map, proof_ctx)
 

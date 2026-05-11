@@ -111,6 +111,17 @@ class CmykExportConfig:
     show_guide_overlay: bool = True
     """Draw trim / bleed / safety rectangles on the soft-proof PNG."""
 
+    trim_to_content_enabled: bool = False
+    """Crop the PDF page to the artwork's actual extent (replaces the
+    fixed trim). When True, ``target_width_inches``/``target_height_inches``
+    and ``bleed_inches`` are bypassed for this file — the page size matches
+    the trimmed SVG. Soft-proof guides are suppressed (no margins to draw).
+    Default off so existing exports keep their geometry."""
+
+    trim_to_content_padding_pt: float = 0.0
+    """Padding (in PostScript points) added around the trimmed bbox on all
+    sides. 0 = bbox flush. Range typically 0–20."""
+
 
 @dataclass
 class AppConfig:
@@ -231,6 +242,12 @@ def load_config() -> AppConfig:
         force_k_min_text_pt=float(cmyk.get("force_k_min_text_pt", 9.0)),
         safety_inches=float(cmyk.get("safety_inches", 0.1875)),
         show_guide_overlay=bool(cmyk.get("show_guide_overlay", True)),
+        trim_to_content_enabled=bool(
+            cmyk.get("trim_to_content", {}).get("enabled", False)
+        ),
+        trim_to_content_padding_pt=float(
+            cmyk.get("trim_to_content", {}).get("padding_pt", 0.0)
+        ),
     )
 
     cfg.log_level = str(color_raw.get("logging", {}).get("level", "INFO")).upper()

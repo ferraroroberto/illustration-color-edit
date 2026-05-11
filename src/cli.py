@@ -385,6 +385,17 @@ def cmd_cmyk_convert(args: argparse.Namespace, cfg: AppConfig) -> int:
         if args.filename_template is not None
         else cfg.cmyk_export.filename_template
     )
+    # --trim / --no-trim only overrides when explicitly passed; otherwise
+    # the configured value wins. argparse BooleanOptionalAction sets the
+    # attribute to None when neither flag is given.
+    trim_enabled = (
+        args.trim if args.trim is not None
+        else cfg.cmyk_export.trim_to_content_enabled
+    )
+    trim_padding = (
+        args.trim_padding_pt if args.trim_padding_pt is not None
+        else cfg.cmyk_export.trim_to_content_padding_pt
+    )
     ctx = CmykContext(
         output_dir=cfg.cmyk_export.output_dir,
         icc_profile=cfg.cmyk_export.icc_profile_path,
@@ -404,6 +415,8 @@ def cmd_cmyk_convert(args: argparse.Namespace, cfg: AppConfig) -> int:
         force_k_min_text_pt=cfg.cmyk_export.force_k_min_text_pt,
         safety_inches=cfg.cmyk_export.safety_inches,
         show_guide_overlay=cfg.cmyk_export.show_guide_overlay,
+        trim_to_content_enabled=trim_enabled,
+        trim_to_content_padding_pt=trim_padding,
     )
 
     if args.dry_run:
@@ -534,6 +547,26 @@ def build_parser() -> argparse.ArgumentParser:
             "Override cmyk_export.filename_template for this run. "
             "Supports {stem}, {chapter}, {figure} (also {chapter:02d}), "
             "{description}, {slug}. Empty/unset = '<stem>_CMYK.pdf' default."
+        ),
+    )
+    # Default=None so we can distinguish "user passed --trim/--no-trim" from
+    # "user didn't pass it" and fall back to the config value in that case.
+    p_cmyk_convert.add_argument(
+        "--trim", default=None,
+        action=argparse.BooleanOptionalAction,
+        help=(
+            "Override cmyk_export.trim_to_content.enabled for this run. "
+            "Use --trim to crop the PDF page to the artwork bbox (replaces "
+            "the configured target_width/height and bleed); --no-trim to "
+            "force the configured trim regardless of config.json."
+        ),
+    )
+    p_cmyk_convert.add_argument(
+        "--trim-padding-pt", default=None, type=float, dest="trim_padding_pt",
+        help=(
+            "Override cmyk_export.trim_to_content.padding_pt for this run. "
+            "Pt around the trimmed bbox on all sides (0–20). Only meaningful "
+            "when trim-to-content is enabled."
         ),
     )
 

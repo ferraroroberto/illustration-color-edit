@@ -53,9 +53,18 @@ def _persist_settings(cfg) -> Path | None:
         "force_k_min_text_pt": cfg.cmyk_export.force_k_min_text_pt,
         "safety_inches": cfg.cmyk_export.safety_inches,
         "show_guide_overlay": cfg.cmyk_export.show_guide_overlay,
+        "trim_to_content": {
+            "enabled": cfg.cmyk_export.trim_to_content_enabled,
+            "padding_pt": cfg.cmyk_export.trim_to_content_padding_pt,
+        },
     }
     cfg_path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
     return cfg_path
+
+
+# Public alias so the Export tab can persist its own trim toggle edits
+# without reaching into a private helper.
+persist_settings = _persist_settings
 
 
 def _render_filename_preview(template: str, library: LibraryManager) -> None:

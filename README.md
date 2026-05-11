@@ -334,10 +334,24 @@ The app has eleven sidebar destinations organised as: **Library** ·
     soft-proof PNG carrying trim / bleed / safety overlays) into
     `output_cmyk/`, plus an HTML QA report whose per-file row includes
     **TAC max %** and **force-K detection counts** with a tooltip
-    showing mean / p99 / over-limit fraction. The bottom of the tab
-    has a **Create delivery package** button that snapshots
-    `config.json`, `color-config.json`, `semantic-palette.json` plus
-    every PDF (with SHA-256) into `deliveries/<UTC-stamp>-<slug>/`.
+    showing mean / p99 / over-limit fraction. Inline **Trim PDF to
+    content bounds** toggle (off by default) crops the PDF page to the
+    artwork's actual extent — page size = bbox + optional pt padding,
+    replacing the configured `target_width/height_inches` and
+    `bleed_inches` for that run; guides on the soft-proof are
+    suppressed because no margins exist. The bbox is computed by
+    rendering the SVG to a transparent PNG and reading its alpha
+    extent via Pillow, so strokes, text anti-alias, and filter halos
+    are included — whatever Inkscape will draw is what gets cropped.
+    Configured under `cmyk_export.trim_to_content.{enabled,padding_pt}`
+    in `config.json`, overridable from the CLI with `cmyk-convert
+    --trim / --no-trim --trim-padding-pt N`. See
+    [`docs/2026-05-11-trim-to-content.md`](docs/2026-05-11-trim-to-content.md)
+    for the bbox-engine iterations and the trade-offs.
+    The bottom of the tab has a **Create delivery package** button
+    that snapshots `config.json`, `color-config.json`,
+    `semantic-palette.json` plus every PDF (with SHA-256) into
+    `deliveries/<UTC-stamp>-<slug>/`.
 11. **CMYK Settings** — paths, ICC profile, Ghostscript binary,
     trim/bleed, PDF/X-1a, soft-proof DPI, audit-sidecars toggle, plus
     the new **TAC limit / sample DPI / min stroke pt / min text pt**
@@ -478,6 +492,9 @@ soft-proof timing, ICC profile choice, PDF/X), see
 the theory behind the publisher-grade additions (TAC, force-K, semantic
 palette, color-blind risk, delivery snapshots), see
 [`docs/2026-05-09-publisher-grade-additions.md`](docs/2026-05-09-publisher-grade-additions.md).
+For the trim-to-content step (render-and-detect bbox, why
+`svgelements` and `inkscape -S` weren't enough), see
+[`docs/2026-05-11-trim-to-content.md`](docs/2026-05-11-trim-to-content.md).
 
 ## End-to-end workflow
 

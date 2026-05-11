@@ -20,6 +20,10 @@
     "pdfx_compliance": false,
     "generate_preview_png": true,
     "preview_dpi": 150,
-    "audit_artifacts": true
+    "audit_artifacts": true,
+    "trim_to_content": {
+      "enabled": false,
+      "padding_pt": 0.0
+    }
   }
 }

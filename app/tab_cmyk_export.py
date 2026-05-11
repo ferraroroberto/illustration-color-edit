@@ -15,6 +15,7 @@ import streamlit as st
 from common import load_semantic_palette, open_in_explorer
 from src.cmyk_pipeline import CmykContext, process_batch
 from src.config import PROJECT_ROOT, CmykExportConfig
+from tab_cmyk_settings import persist_settings as _persist_cmyk_settings
 from src.delivery import create_snapshot
 from src.library_manager import LibraryManager
 from src.mapping_store import MappingStore
@@ -30,7 +31,14 @@ def render() -> None:
 
     # ---- Active settings summary (read-only) ------------------------------ #
     pdfx_label = "PDF/X-1a:2003" if ce.pdfx_compliance else "plain DeviceCMYK"
+    trim_line = (
+        f"**Trim to content:** ON (+{ce.trim_to_content_padding_pt:g}pt padding) — "
+        "page = artwork extent; configured trim/bleed bypassed"
+        if ce.trim_to_content_enabled
+        else "**Trim to content:** OFF — using configured trim/bleed below"
+    )
     st.info(
+        f"{trim_line}  \n"
         f"**ICC:** `{ce.icc_profile_path.name}` · "
         f"**Trim:** {ce.target_width_inches:.3f} × {ce.target_height_inches:.3f} in · "
         f"**Bleed:** {ce.bleed_inches:.3f} in · "
@@ -38,6 +46,45 @@ def render() -> None:
         f"**Output:** `{ce.output_dir}`  \n"
         "Edit these in **CMYK → Settings**."
     )
+
+    # ---- Trim-to-content (inline override) -------------------------------- #
+    # Exposed inline because flipping this changes what the publisher gets
+    # at the page level — easier to reach from the same tab that runs the
+    # batch than to bounce through Settings. Persisted to config.json so
+    # the next batch run (and the CLI) see the same state.
+    with st.expander(
+        f"Trim PDF to content bounds — {'ON' if ce.trim_to_content_enabled else 'OFF'}",
+        expanded=ce.trim_to_content_enabled,
+    ):
+        st.caption(
+            "When on, the PDF page size matches the artwork's actual extent "
+            "(replaces the configured trim and bleed). Soft-proof guides are "
+            "suppressed because there are no trim/bleed/safety margins to draw."
+        )
+        t1, t2 = st.columns([1, 2])
+        ce.trim_to_content_enabled = t1.checkbox(
+            "Trim PDF to content bounds",
+            value=ce.trim_to_content_enabled,
+            key="cmyk_export_trim_enabled",
+        )
+        ce.trim_to_content_padding_pt = t2.number_input(
+            "Padding around content (pt)",
+            min_value=0.0, max_value=20.0,
+            value=float(ce.trim_to_content_padding_pt), step=0.5,
+            key="cmyk_export_trim_padding",
+            help="Pt = PostScript points (1 pt = 1/72 in). 0 = bbox flush.",
+        )
+        # Always render the save button — gating it on a dirty flag races
+        # with Streamlit's widget→state sync (by the time the click fires
+        # the next rerun, ``ce`` already matches the widget so dirty=False
+        # and the button vanishes without ever executing).
+        if st.button("Save trim setting to config.json",
+                     key="cmyk_export_save_trim", width="content"):
+            written = _persist_cmyk_settings(cfg)
+            if written:
+                st.success(f"Saved to `{written}`")
+            else:
+                st.error("No config.json found to save into.")
 
     # ---- Pre-flight checks ------------------------------------------------- #
     if not ce.icc_profile_path.is_file():
@@ -62,10 +109,19 @@ def render() -> None:
     if only_reviewed:
         entries = [e for e in entries if store.load_illustration(e.filename).cmyk_status == "reviewed"]
     st.write(f"{len(entries)} illustration(s) queued.")
+    if ce.trim_to_content_enabled:
+        page_line = (
+            f"**Page:** trim to content (+{ce.trim_to_content_padding_pt:g}pt) · "
+            f"**Bleed:** 0 in (overridden)"
+        )
+    else:
+        page_line = (
+            f"**Trim:** {ce.target_width_inches:.3f} × {ce.target_height_inches:.3f} in · "
+            f"**Bleed:** {ce.bleed_inches:.3f} in"
+        )
     st.markdown(
         f"**Output:** `{ce.output_dir}` · "
-        f"**Trim:** {ce.target_width_inches:.3f} × {ce.target_height_inches:.3f} in · "
-        f"**Bleed:** {ce.bleed_inches:.3f} in · "
+        f"{page_line} · "
         f"**PDF/X:** {'on' if ce.pdfx_compliance else 'off'}"
     )
 
@@ -95,6 +151,8 @@ def render() -> None:
             force_k_min_text_pt=ce.force_k_min_text_pt,
             safety_inches=ce.safety_inches,
             show_guide_overlay=ce.show_guide_overlay,
+            trim_to_content_enabled=ce.trim_to_content_enabled,
+            trim_to_content_padding_pt=ce.trim_to_content_padding_pt,
         )
 
         # Build per-file mapping list. Each illustration gets its own merge
@@ -164,6 +222,19 @@ def render() -> None:
                     "pdf": str(r.output_pdf) if r.output_pdf else "",
                     "preview": str(r.preview_png) if r.preview_png else "",
                     "error": r.error or "",
+                    # Trim-to-content columns. Empty strings when trim was
+                    # off or the SVG had no visible content (fallback path).
+                    "original_viewBox": (
+                        r.trim.original_viewbox if r.trim and r.trim.had_content else ""
+                    ),
+                    "trimmed_viewBox": (
+                        r.trim.new_viewbox if r.trim and r.trim.had_content else ""
+                    ),
+                    "page_inches": (
+                        f"{r.trim.width_in:.3f} × {r.trim.height_in:.3f}"
+                        if r.trim and r.trim.had_content
+                        else ""
+                    ),
                 }
                 for r in report.files
             ],
