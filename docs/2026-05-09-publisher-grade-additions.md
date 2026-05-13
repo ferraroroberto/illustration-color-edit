@@ -338,7 +338,7 @@ End-to-end smoke checks:
 
 ---
 
-## Open items
+## Caveats and tuning notes
 
 * **Force-K Layer B** (sentinel-based per-color rewrite of fine lines
   to pure-K) is intentionally not implemented — the Ghostscript flags
@@ -350,6 +350,5 @@ End-to-end smoke checks:
 * **Color-blind risk thresholds** — the (25, 10) ΔE pair is a
   starting heuristic. May need tuning once we see real false-positive /
   false-negative rates on the user's library.
-* **Multi-publisher profiles** — data shapes already support multiple
-  themes; UI/CLI for selecting per-publisher bundles (trim + ICC + TAC
-  limit + theme) is a future migration, not a rewrite.
+
+Multi-publisher profiles (per-publisher bundles of trim + ICC + TAC + theme) have been migrated to a GitHub issue.

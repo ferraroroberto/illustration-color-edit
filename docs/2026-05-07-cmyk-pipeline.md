@@ -253,20 +253,9 @@ The Ghostscript version is probed once per batch (`gs -v`) and reused for
 every per-file report. Soft-proofs from the CMYK Editor never write a
 report — they're scratch previews.
 
-## Future work (deferred for v1)
+## Future work
 
-* **Explicit DeviceCMYK overrides** via PDF post-processing. Would let a
-  user say "this red = `0/85/85/0` exactly" and bypass the ICC clip for
-  that color. Adds a meaningful chunk of code (PDF stream parsing) so it's
-  deferred until proofs prove it's needed.
-* **Automatic ICC profile download.** Today the user fetches the profile
-  manually. Could add a "fetch ISO Coated v2" helper that pulls from
-  eci.org. Skipped because licensing/redistribution is fiddly.
-* **PDF/X-4** support. PDF/X-4 *allows* live transparency but requires
-  more rigorous Output Intent + transparency blending settings. PDF/X-1a
-  covers the common publisher requirement at lower complexity.
-* **Multi-folder batch UI.** Today the tab operates on the configured
-  `input_dir`; a user with several manuscripts in flight would want a
-  picker. Easy follow-up.
-* **CLI `cmyk-soft-proof` subcommand.** Currently soft-proof is UI-only.
-  Could expose it on the CLI as a one-liner for scripting.
+Items deferred from v1 have been migrated to GitHub issues:
+
+* Explicit DeviceCMYK overrides + PDF/X-4 support → see the "Advanced press-color control" issue.
+* Multi-folder batch UI, CLI `cmyk-soft-proof`, and automatic ICC profile download → see the "Workflow ergonomics" issue.
