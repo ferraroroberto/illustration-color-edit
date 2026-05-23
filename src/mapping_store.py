@@ -224,7 +224,7 @@ class MappingStore:
         Mirrors :meth:`load_global_map` but reads ``cmyk_correction_map`` from
         ``config.json``. Values are RGB→RGB pre-corrections that nudge colors
         into a print-safe RGB starting point before the ICC profile does the
-        final CMYK conversion. See ``docs/2026-05-07-cmyk-pipeline.md``.
+        final CMYK conversion. See ``docs/cmyk-pipeline.md``.
         """
         raw = self.load_config_raw()
         gm = raw.get("cmyk_correction_map", {}) or {}

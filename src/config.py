@@ -59,7 +59,7 @@ class CmykExportConfig:
     sibling of :class:`PngExportConfig` for the grayscale workflow.
 
     The ICC profile path and Ghostscript binary are user-supplied per machine;
-    see ``docs/2026-05-07-cmyk-pipeline.md`` for sources.
+    see ``docs/cmyk-pipeline.md`` for sources.
     """
 
     enabled: bool = True

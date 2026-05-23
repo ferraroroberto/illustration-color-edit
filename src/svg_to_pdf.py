@@ -10,7 +10,7 @@ We pick Inkscape over cairosvg for two reasons:
   2. Inkscape consistently round-trips Affinity Designer SVGs (gradients,
      embedded rasters, filters) better than cairosvg in our experience.
 
-See ``docs/2026-05-07-cmyk-pipeline.md`` for the full rationale.
+See ``docs/cmyk-pipeline.md`` for the full rationale.
 """
 
 from __future__ import annotations

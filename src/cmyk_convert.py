@@ -7,7 +7,7 @@ is DeviceCMYK, with all colors converted through the supplied ICC profile.
 Optionally produces a PDF/X-1a:2003 compliant file (``pdfx=True``). Note that
 PDF/X-1a forbids transparency — Inkscape-exported SVGs with semi-transparent
 fills may fail compliance; in that case Ghostscript will warn and the output
-may not be strictly compliant. See ``docs/2026-05-07-cmyk-pipeline.md``.
+may not be strictly compliant. See ``docs/cmyk-pipeline.md``.
 
 Also exposes :func:`pdf_to_preview_png` for soft-proof rendering: re-rasterise
 a CMYK PDF page back to PNG via Ghostscript so the user can visually verify

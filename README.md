@@ -74,7 +74,7 @@ prepress vocabulary to what this tool does:
   themes, no per-illustration touching.
 
 For the *why* behind each check, see
-[`docs/2026-05-09-publisher-grade-additions.md`](docs/2026-05-09-publisher-grade-additions.md).
+[`docs/publisher-grade-additions.md`](docs/publisher-grade-additions.md).
 
 ## Project structure
 
@@ -241,7 +241,7 @@ root) or absolute.
   "cmyk_correction_map": {
     // RGB → RGB pre-corrections applied before the ICC profile converts to CMYK.
     // The ICC profile does the actual CMYK math; these entries just steer where
-    // the gamut clip lands. See docs/2026-05-07-cmyk-pipeline.md.
+    // the gamut clip lands. See docs/cmyk-pipeline.md.
     "#E74C3C": {
       "target": "#D14B3C",
       "label": "saturated red → print-safe red",
@@ -329,7 +329,7 @@ The app has eleven sidebar destinations organised as: **Library** ·
    "Highlight ΔE ≥ 5" header toggle outlines gamut-clipping swatches in
    red. "Replace globally" updates the global correction map + cleans
    per-file overrides in one pass with a before / after / on-press
-   visual diff. See [`docs/2026-05-08-curated-palette.md`](docs/2026-05-08-curated-palette.md).
+   visual diff. See [`docs/curated-palette.md`](docs/curated-palette.md).
 10. **CMYK Print Export** — batch: writes `<name>_CMYK.pdf` (with the
     soft-proof PNG carrying trim / bleed / safety overlays) into
     `output_cmyk/`, plus an HTML QA report whose per-file row includes
@@ -345,9 +345,7 @@ The app has eleven sidebar destinations organised as: **Library** ·
     are included — whatever Inkscape will draw is what gets cropped.
     Configured under `cmyk_export.trim_to_content.{enabled,padding_pt}`
     in `config.json`, overridable from the CLI with `cmyk-convert
-    --trim / --no-trim --trim-padding-pt N`. See
-    [`docs/2026-05-11-trim-to-content.md`](docs/2026-05-11-trim-to-content.md)
-    for the bbox-engine iterations and the trade-offs.
+    --trim / --no-trim --trim-padding-pt N`.
     The bottom of the tab has a **Create delivery package** button
     that snapshots `config.json`, `color-config.json`,
     `semantic-palette.json` plus every PDF (with SHA-256) into
@@ -488,13 +486,10 @@ color CMYK PDFs to a publisher.
 
 For the *why* behind the design (RGB correction vs explicit CMYK overrides,
 soft-proof timing, ICC profile choice, PDF/X), see
-[`docs/2026-05-07-cmyk-pipeline.md`](docs/2026-05-07-cmyk-pipeline.md). For
+[`docs/cmyk-pipeline.md`](docs/cmyk-pipeline.md). For
 the theory behind the publisher-grade additions (TAC, force-K, semantic
 palette, color-blind risk, delivery snapshots), see
-[`docs/2026-05-09-publisher-grade-additions.md`](docs/2026-05-09-publisher-grade-additions.md).
-For the trim-to-content step (render-and-detect bbox, why
-`svgelements` and `inkscape -S` weren't enough), see
-[`docs/2026-05-11-trim-to-content.md`](docs/2026-05-11-trim-to-content.md).
+[`docs/publisher-grade-additions.md`](docs/publisher-grade-additions.md).
 
 ## End-to-end workflow
 
