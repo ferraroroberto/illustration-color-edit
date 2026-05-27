@@ -98,12 +98,32 @@ class CmykContext:
     suppressed because there are no trim/bleed/safety margins to draw."""
     trim_to_content_padding_pt: float = 0.0
     """Padding (pt) added around the trimmed bbox on all sides."""
+    print_dir: Optional[Path] = None
+    """Where the print deliverables land (PDF, audit sidecars, the trimmed
+    ``_preview_cut.png``, QA report). ``None`` falls back to ``output_dir``
+    so tests and older callers keep flat-layout behavior."""
+    preview_dir: Optional[Path] = None
+    """Where the full uncropped ``_preview_full.png`` lands. ``None`` falls
+    back to the resolved ``print_dir`` (i.e. flat layout)."""
+    generate_full_preview: bool = False
+    """When True, also render a second soft-proof PNG at the SVG's natural
+    aspect (no trim, no letterbox) into ``preview_dir``. Off by default in
+    the dataclass to keep test construction terse; ``config.json`` defaults
+    it on for the real pipeline."""
     # Cached at batch start so each file's report can record it without
     # spawning N extra `gs -v` subprocesses. Empty string = not yet probed.
     ghostscript_version: str = ""
 
     def resolved_tmp_dir(self) -> Path:
         return self.tmp_dir or (self.output_dir / "_tmp")
+
+    def resolved_print_dir(self) -> Path:
+        """Effective print-output directory, falling back to ``output_dir``."""
+        return self.print_dir or self.output_dir
+
+    def resolved_preview_dir(self) -> Path:
+        """Effective full-preview directory, falling back to print_dir."""
+        return self.preview_dir or self.resolved_print_dir()
 
 
 @dataclass
@@ -114,6 +134,13 @@ class FileResult:
     status: str  # "ok" | "error"
     output_pdf: Optional[Path] = None
     preview_png: Optional[Path] = None
+    """The PDF-matching soft-proof (renamed to ``_preview_cut.png`` on disk).
+    Kept named ``preview_png`` on the dataclass so existing call sites and
+    tests keep working."""
+    preview_full_png: Optional[Path] = None
+    """Optional full-aspect uncropped soft-proof, written into
+    ``ctx.resolved_preview_dir()``. ``None`` when full-preview is disabled
+    or its render failed."""
     report_txt: Optional[Path] = None
     replacements: int = 0
     # Per-source-hex breakdown of pre-correction replacements (source -> count).
@@ -190,6 +217,92 @@ def _apply_page_size(svg_path: Path, width_in: float, height_in: float) -> None:
         root.set("preserveAspectRatio", "xMidYMid meet")
     # Any other explicit author value is respected.
     tree.write(str(svg_path), xml_declaration=True, encoding="utf-8", standalone=False)
+
+
+def _read_viewbox_aspect(svg_path: Path) -> Optional[tuple[float, float]]:
+    """Return ``(width_units, height_units)`` from the SVG viewBox, or ``None``.
+
+    Used by :func:`_render_full_preview` to pick a page size that preserves
+    the artwork's natural aspect ratio. Falls back to ``None`` when the
+    viewBox is missing or unparseable — the caller then uses a fallback.
+    """
+    try:
+        tree = etree.parse(str(svg_path))
+    except (OSError, etree.XMLSyntaxError):
+        return None
+    vb = (tree.getroot().get("viewBox") or "").strip()
+    if not vb:
+        return None
+    parts = vb.replace(",", " ").split()
+    if len(parts) != 4:
+        return None
+    try:
+        _, _, w, h = (float(p) for p in parts)
+    except ValueError:
+        return None
+    if w <= 0 or h <= 0:
+        return None
+    return w, h
+
+
+def _render_full_preview(
+    *,
+    corrected_full_svg: Path,
+    out_png: Path,
+    tmp_dir: Path,
+    stem: str,
+    ctx: "CmykContext",
+) -> None:
+    """Render the corrected SVG to a CMYK soft-proof PNG at natural aspect.
+
+    Sizes the page so the longer side matches the larger of the configured
+    trim dimensions, preserving the SVG viewBox aspect. The intermediate
+    RGB and CMYK PDFs are throwaway and live under ``tmp_dir``; only the
+    PNG persists at ``out_png``.
+
+    Re-raises :class:`CmykConvertError` / :class:`SvgToPdfError` so the
+    caller can record a per-file warning without killing the batch.
+    """
+    aspect = _read_viewbox_aspect(corrected_full_svg)
+    longest_in = max(ctx.width_inches, ctx.height_inches)
+    if aspect is None:
+        # Fall back to the configured trim — better than guessing.
+        full_w_in = ctx.width_inches
+        full_h_in = ctx.height_inches
+    else:
+        vb_w, vb_h = aspect
+        if vb_w >= vb_h:
+            full_w_in = longest_in
+            full_h_in = longest_in * (vb_h / vb_w)
+        else:
+            full_h_in = longest_in
+            full_w_in = longest_in * (vb_w / vb_h)
+
+    _apply_page_size(corrected_full_svg, full_w_in, full_h_in)
+
+    full_rgb_pdf = tmp_dir / f"{stem}_rgb_full.pdf"
+    svg_to_pdf(
+        corrected_full_svg, full_rgb_pdf,
+        width_inches=full_w_in,
+        height_inches=full_h_in,
+        bleed_inches=0.0,
+        inkscape_exe=ctx.inkscape_exe,
+    )
+    full_cmyk_pdf = tmp_dir / f"{stem}_full_CMYK.pdf"
+    rgb_pdf_to_cmyk(
+        full_rgb_pdf, full_cmyk_pdf,
+        icc_profile=ctx.icc_profile,
+        gs_exe=ctx.ghostscript_exe,
+        pdfx=False,  # client preview never enforces PDF/X
+        keep_pdfx_def_ps=False,
+        force_k=ctx.apply_auto_fix,
+    )
+    pdf_to_preview_png(
+        full_cmyk_pdf, out_png,
+        icc_profile=ctx.icc_profile,
+        dpi=ctx.preview_dpi,
+        gs_exe=ctx.ghostscript_exe,
+    )
 
 
 def detect_svg_warnings(svg_path: Path) -> list[str]:
@@ -463,6 +576,10 @@ def process_one(
 
     try:
         ctx.output_dir.mkdir(parents=True, exist_ok=True)
+        print_out = ctx.resolved_print_dir()
+        preview_out = ctx.resolved_preview_dir()
+        print_out.mkdir(parents=True, exist_ok=True)
+        preview_out.mkdir(parents=True, exist_ok=True)
         tmp = ctx.resolved_tmp_dir()
         tmp.mkdir(parents=True, exist_ok=True)
 
@@ -482,7 +599,7 @@ def process_one(
         # Sweep any audit sidecars left from a previous export of this stem.
         # Done up front so a re-run that disables audit_artifacts (or fails
         # before the report stage) leaves no orphans behind.
-        cmyk_pdf = ctx.output_dir / f"{out_stem}.pdf"
+        cmyk_pdf = print_out / f"{out_stem}.pdf"
         _purge_prior_sidecars(cmyk_pdf)
 
         result.warnings = detect_svg_warnings(svg_path)
@@ -513,6 +630,15 @@ def process_one(
         result.replacements = report.replacements
         result.replacements_by_source = dict(report.by_source)
         result.unmapped_colors = sorted(report.unmapped)
+
+        # 1a. Snapshot the corrected SVG before trim mutates it — the full
+        # preview renders from this so the client sees the artwork at its
+        # natural aspect (no crop, no letterbox). Only needed when the
+        # full-preview pass will run.
+        corrected_full_svg: Optional[Path] = None
+        if ctx.generate_full_preview:
+            corrected_full_svg = tmp / f"{stem}_corrected_full.svg"
+            corrected_full_svg.write_bytes(body)
 
         # 1b. Either trim the SVG to its visible content (overrides the
         #     configured trim) or letterbox it inside the configured trim.
@@ -604,9 +730,12 @@ def process_one(
             log.warning("TAC check failed for %s: %s", svg_path.name, exc)
             result.warnings.append(f"TAC check unavailable: {exc}")
 
-        # 4. Optional soft-proof PNG.
+        # 4. Optional soft-proof PNG — the "cut" preview that matches the
+        #    PDF (trimmed when trim-to-content is on). Renamed from the
+        #    historical `_preview.png` so the new full preview can sit
+        #    alongside with a clear naming convention.
         if ctx.generate_preview:
-            preview = ctx.output_dir / f"{out_stem}_preview.png"
+            preview = print_out / f"{out_stem}_preview_cut.png"
             try:
                 pdf_to_preview_png(
                     cmyk_pdf, preview,
@@ -633,6 +762,29 @@ def process_one(
                         result.warnings.append(f"guide overlay failed: {gxc}")
             except CmykConvertError as exc:
                 result.warnings.append(f"preview PNG failed: {exc}")
+
+        # 4b. Optional FULL preview — the SVG at its natural aspect (no trim,
+        #     no letterbox), soft-proofed through the same ICC pipeline.
+        #     Lands in ``preview_dir`` so the client deliverables form a
+        #     scannable folder distinct from the print stream.
+        if (
+            ctx.generate_preview
+            and ctx.generate_full_preview
+            and corrected_full_svg is not None
+        ):
+            full_preview = preview_out / f"{out_stem}_preview_full.png"
+            try:
+                _render_full_preview(
+                    corrected_full_svg=corrected_full_svg,
+                    out_png=full_preview,
+                    tmp_dir=tmp,
+                    stem=stem,
+                    ctx=ctx,
+                )
+                result.preview_full_png = full_preview
+            except (CmykConvertError, SvgToPdfError) as exc:
+                log.warning("full preview failed for %s: %s", svg_path.name, exc)
+                result.warnings.append(f"full preview failed: {exc}")
 
         # 5. Optional audit report. Written last so it can record the final
         #    sizes (including the soft-proof PNG, if any).
@@ -725,12 +877,14 @@ def soft_proof_one(
         pdfx=False,  # soft-proof never enforces PDF/X
         generate_preview=True,
         preview_dpi=ctx.preview_dpi,
-        # Soft-proofs are throwaway previews — no audit sidecars.
+        # Soft-proofs are throwaway previews — no audit sidecars and no
+        # split layout. Everything goes flat into the scratch dir.
         audit_artifacts=False,
         tmp_dir=scratch / "_tmp",
         ghostscript_version=ctx.ghostscript_version,
         trim_to_content_enabled=ctx.trim_to_content_enabled,
         trim_to_content_padding_pt=ctx.trim_to_content_padding_pt,
+        generate_full_preview=False,
     )
     return process_one(svg_path, correction_map, proof_ctx)
 

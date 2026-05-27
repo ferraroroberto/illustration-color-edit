@@ -97,6 +97,7 @@ def render_report(report: BatchReport, output_dir: Path) -> str:
             f'<td style="text-align:right">{f.elapsed_seconds:.2f}s</td>'
             f"<td>{_fmt_path(f.output_pdf, output_dir)}</td>"
             f"<td>{_fmt_path(f.preview_png, output_dir)}</td>"
+            f"<td>{_fmt_path(f.preview_full_png, output_dir)}</td>"
             f'<td style="color:#c33">{error_html}</td>'
             f"</tr>"
         )
@@ -167,9 +168,9 @@ def render_report(report: BatchReport, output_dir: Path) -> str:
     <th style="text-align:right">TAC max</th><th>force-K</th>
     <th>unmapped colors</th><th>warnings</th>
     <th style="text-align:right">elapsed</th>
-    <th>PDF</th><th>preview</th><th>error</th>
+    <th>PDF</th><th>cut preview</th><th>full preview</th><th>error</th>
   </tr></thead>
-  <tbody>{''.join(rows) or '<tr><td colspan="11" style="color:#888">No files processed.</td></tr>'}</tbody>
+  <tbody>{''.join(rows) or '<tr><td colspan="12" style="color:#888">No files processed.</td></tr>'}</tbody>
 </table>
 </body>
 </html>
