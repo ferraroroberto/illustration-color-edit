@@ -123,7 +123,9 @@ illustration-color-edit/
 ├── profiles/                   # ICC profiles — drop in here, gitignored
 ├── input/                      # source SVGs — gitignored, path set in config.json
 ├── output/                     # converted grayscale SVGs/PNGs — gitignored
-├── output_cmyk/                # converted CMYK PDFs + QA report — gitignored
+├── output_cmyk/                # CMYK pipeline output — gitignored
+│   ├── print/                  #   PDFs, audit sidecars, cut preview, QA report
+│   └── preview/                #   full uncropped client previews
 ├── metadata/                   # per-illustration .mapping.json — gitignored
 ├── config.example.json         # committed template for folder paths + cmyk_export
 ├── config.json                 # gitignored, your local folder paths
@@ -226,7 +228,12 @@ root) or absolute.
     "force_k_min_stroke_pt": 0.5,                           // strokes ≤ this (pt) get flagged as fine-line
     "force_k_min_text_pt": 9.0,                             // text smaller than this (pt) gets flagged
     "safety_inches": 0.1875,                                // safety margin inset from trim (≈ 4.76 mm)
-    "show_guide_overlay": true                              // composite trim/bleed/safety guides on the soft-proof PNG
+    "show_guide_overlay": true,                             // composite trim/bleed/safety guides on the soft-proof PNG
+    "subdirs": {                                            // CMYK output is split into two subfolders so print and client deliverables stay separate
+      "print":   "print",                                   //   PDFs, audit sidecars, the cut preview, QA report
+      "preview": "preview"                                  //   only the full uncropped client preview PNGs
+    },
+    "generate_full_preview": true                           // also render <stem>_CMYK_preview_full.png at the SVG's natural aspect
   }
 }
 ```
@@ -331,10 +338,16 @@ The app has eleven sidebar destinations organised as: **Library** ·
    per-file overrides in one pass with a before / after / on-press
    visual diff. See [`docs/curated-palette.md`](docs/curated-palette.md).
 10. **CMYK Print Export** — batch: writes `<name>_CMYK.pdf` (with the
-    soft-proof PNG carrying trim / bleed / safety overlays) into
-    `output_cmyk/`, plus an HTML QA report whose per-file row includes
-    **TAC max %** and **force-K detection counts** with a tooltip
-    showing mean / p99 / over-limit fraction. Inline **Trim PDF to
+    `<name>_CMYK_preview_cut.png` soft-proof carrying trim / bleed /
+    safety overlays) into `output_cmyk/<print_subdir>/`, alongside
+    `<name>_CMYK_preview_full.png` — the uncropped client preview at
+    the SVG's natural aspect — in `output_cmyk/<preview_subdir>/`.
+    Defaults split the folders as `print/` and `preview/`; both names
+    are editable in **CMYK → Settings → Output layout** and the
+    full-preview render can be turned off there. An HTML QA report
+    whose per-file row includes **TAC max %** and **force-K detection
+    counts** with a tooltip showing mean / p99 / over-limit fraction
+    lands in the print subfolder. Inline **Trim PDF to
     content bounds** toggle (off by default) crops the PDF page to the
     artwork's actual extent — page size = bbox + optional pt padding,
     replacing the configured `target_width/height_inches` and
@@ -474,8 +487,12 @@ color CMYK PDFs to a publisher.
 6. **Mark reviewed.** Save & mark reviewed in the CMYK Editor.
 7. **Batch export.** Run the **CMYK Print Export** tab (or
    `python -m src.cli cmyk-convert --only-reviewed`). Output lands in
-   `output_cmyk/<name>_CMYK.pdf` plus a soft-proof PNG and an HTML QA
-   report.
+   `output_cmyk/<print_subdir>/<name>_CMYK.pdf` plus
+   `<name>_CMYK_preview_cut.png` and an HTML QA report. When the
+   *Generate full preview* toggle is on, an uncropped client preview
+   `<name>_CMYK_preview_full.png` also lands in
+   `output_cmyk/<preview_subdir>/` so the file you send to the
+   printer and the file you send to the client are already separated.
 8. **Verify** (optional but recommended):
    ```powershell
    gswin64c -o nul -sDEVICE=inkcov output_cmyk\<file>_CMYK.pdf

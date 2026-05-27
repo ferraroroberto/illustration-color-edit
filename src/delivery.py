@@ -101,18 +101,24 @@ def create_snapshot(
     width_inches: float = 0.0,
     height_inches: float = 0.0,
     bleed_inches: float = 0.0,
+    preview_dir: Optional[Path] = None,
 ) -> Path:
     """Create a delivery snapshot.
 
     :param label: human-readable label, e.g. ``"acme-2026-05"``. Slugified
         for the directory name. Required.
     :param project_root: where ``config.json`` etc. live.
-    :param output_dir: where the CMYK PDFs that should be included live.
+    :param output_dir: where the CMYK PDFs that should be included live
+        (the print subfolder under the configured CMYK output directory).
     :param deliveries_dir: where to write the snapshot. Defaults to
         ``project_root / "deliveries"``.
     :param pdf_pattern: glob the output dir with this pattern. The default
         matches the historical naming; pass ``"*.pdf"`` for custom
         templates.
+    :param preview_dir: optional companion directory holding the
+        ``_preview_full.png`` files; when set, those are hardlinked into a
+        sibling ``previews/`` inside the snapshot so the client folder is
+        bundled too.
     :returns: the path to the created delivery directory.
 
     Idempotent in the sense that the directory name includes the
@@ -141,6 +147,9 @@ def create_snapshot(
     # Hardlink every matching PDF + soft-proof PNG into pdfs/.
     pdfs_dir = target / "pdfs"
     pdfs_dir.mkdir(parents=True, exist_ok=True)
+    previews_dir: Optional[Path] = None
+    if preview_dir is not None:
+        preview_dir = Path(preview_dir)
     files: list[DeliveryFile] = []
     for pdf in sorted(output_dir.glob(pdf_pattern)):
         dst = pdfs_dir / pdf.name
@@ -151,11 +160,23 @@ def create_snapshot(
             sha256=_sha256_of(pdf),
             bytes=pdf.stat().st_size,
         ))
-        # Carry the soft-proof PNG along when one exists. Useful for
-        # the publisher to eyeball without opening Acrobat.
-        preview = pdf.with_name(pdf.stem + "_preview.png")
-        if preview.is_file():
-            _link_or_copy(preview, pdfs_dir / preview.name)
+        # Carry the cut soft-proof PNG along when one exists. Useful for
+        # the publisher to eyeball without opening Acrobat. The historical
+        # `_preview.png` name is checked too so older flat-layout outputs
+        # still bundle correctly.
+        cut_preview = pdf.with_name(pdf.stem + "_preview_cut.png")
+        if not cut_preview.is_file():
+            cut_preview = pdf.with_name(pdf.stem + "_preview.png")
+        if cut_preview.is_file():
+            _link_or_copy(cut_preview, pdfs_dir / cut_preview.name)
+        # Bundle the full client preview from the parallel preview dir.
+        if preview_dir is not None and preview_dir.is_dir():
+            full_preview = preview_dir / f"{pdf.stem}_preview_full.png"
+            if full_preview.is_file():
+                if previews_dir is None:
+                    previews_dir = target / "previews"
+                    previews_dir.mkdir(parents=True, exist_ok=True)
+                _link_or_copy(full_preview, previews_dir / full_preview.name)
 
     manifest = DeliveryManifest(
         delivery_id=delivery_id,

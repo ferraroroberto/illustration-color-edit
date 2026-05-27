@@ -24,6 +24,11 @@
     "trim_to_content": {
       "enabled": false,
       "padding_pt": 0.0
-    }
+    },
+    "subdirs": {
+      "print": "print",
+      "preview": "preview"
+    },
+    "generate_full_preview": true
   }
 }

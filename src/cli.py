@@ -417,6 +417,9 @@ def cmd_cmyk_convert(args: argparse.Namespace, cfg: AppConfig) -> int:
         show_guide_overlay=cfg.cmyk_export.show_guide_overlay,
         trim_to_content_enabled=trim_enabled,
         trim_to_content_padding_pt=trim_padding,
+        print_dir=cfg.cmyk_export.print_dir,
+        preview_dir=cfg.cmyk_export.preview_dir,
+        generate_full_preview=cfg.cmyk_export.generate_full_preview,
     )
 
     if args.dry_run:
@@ -478,7 +481,7 @@ def cmd_cmyk_convert(args: argparse.Namespace, cfg: AppConfig) -> int:
             print(f"  FAIL {entry.filename}: {r.error}")
     report.finished_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     report.total_seconds = round(_time.time() - t0, 3)
-    qa_path = write_report(report, cfg.cmyk_export.output_dir)
+    qa_path = write_report(report, cfg.cmyk_export.print_dir)
     print()
     print(f"Total: {report.succeeded} ok / {report.failed} failed in {report.total_seconds:.2f}s")
     print(f"QA report: {qa_path}")
@@ -615,7 +618,8 @@ def cmd_deliver(args: argparse.Namespace, cfg: AppConfig) -> int:
     target = create_snapshot(
         label=args.label,
         project_root=PROJECT_ROOT,
-        output_dir=cfg.cmyk_export.output_dir,
+        output_dir=cfg.cmyk_export.print_dir,
+        preview_dir=cfg.cmyk_export.preview_dir,
         pdf_pattern=args.pattern,
         icc_profile=str(cfg.cmyk_export.icc_profile_path),
         pdfx=cfg.cmyk_export.pdfx_compliance,

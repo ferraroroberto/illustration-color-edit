@@ -57,6 +57,11 @@ def _persist_settings(cfg) -> Path | None:
             "enabled": cfg.cmyk_export.trim_to_content_enabled,
             "padding_pt": cfg.cmyk_export.trim_to_content_padding_pt,
         },
+        "subdirs": {
+            "print": cfg.cmyk_export.print_subdir,
+            "preview": cfg.cmyk_export.preview_subdir,
+        },
+        "generate_full_preview": cfg.cmyk_export.generate_full_preview,
     }
     cfg_path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
     return cfg_path
@@ -159,6 +164,14 @@ def render() -> None:
 
         st.markdown("**Output directory**")
         st.code(str(ce.output_dir), language=None)
+        st.caption("Print deliverables (PDFs, reports, cut preview):")
+        st.code(str(ce.print_dir), language=None)
+        st.caption("Full client previews:")
+        st.code(str(ce.preview_dir), language=None)
+        st.markdown(
+            f"**Full preview:** {'on' if ce.generate_full_preview else 'off'} — "
+            "renders an uncropped soft-proof at the SVG's natural aspect."
+        )
 
     st.divider()
 
@@ -197,6 +210,36 @@ def render() -> None:
         "Output directory", value=str(ce.output_dir),
         key="cmyk_settings_outdir",
     ))
+
+    st.markdown("##### Output layout")
+    st.caption(
+        "Print artifacts (PDFs + reports + cut preview) and full client "
+        "previews land in two subfolders under the output directory so "
+        "they can be sent to different audiences without filtering. Leave "
+        "a subfolder name blank to keep the historical flat layout."
+    )
+    o1, o2, o3 = st.columns([2, 2, 2])
+    ce.print_subdir = o1.text_input(
+        "Print subfolder", value=ce.print_subdir,
+        key="cmyk_settings_print_subdir",
+        help="Receives PDFs, audit sidecars, the cut preview, and the QA report.",
+    )
+    ce.preview_subdir = o2.text_input(
+        "Preview subfolder", value=ce.preview_subdir,
+        key="cmyk_settings_preview_subdir",
+        help="Receives <stem>_CMYK_preview_full.png — the uncropped client preview.",
+    )
+    ce.generate_full_preview = o3.checkbox(
+        "Generate full (uncropped) preview",
+        value=ce.generate_full_preview,
+        key="cmyk_settings_full_preview",
+        help=(
+            "Renders an additional soft-proof PNG at the SVG's natural "
+            "aspect (no trim, no letterbox) so clients see the artwork "
+            "the way it was authored. Off doubles per-file speed on big "
+            "batches; on is recommended for client-facing review."
+        ),
+    )
     d1, d2, d3 = st.columns(3)
     ce.pdfx_compliance = d1.checkbox(
         "PDF/X-1a:2003", value=ce.pdfx_compliance, key="cmyk_settings_pdfx",

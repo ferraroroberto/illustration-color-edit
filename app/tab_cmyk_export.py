@@ -37,13 +37,17 @@ def render() -> None:
         if ce.trim_to_content_enabled
         else "**Trim to content:** OFF — using configured trim/bleed below"
     )
+    full_preview_line = (
+        f"**Full preview:** {'ON' if ce.generate_full_preview else 'OFF'}"
+    )
     st.info(
         f"{trim_line}  \n"
         f"**ICC:** `{ce.icc_profile_path.name}` · "
         f"**Trim:** {ce.target_width_inches:.3f} × {ce.target_height_inches:.3f} in · "
         f"**Bleed:** {ce.bleed_inches:.3f} in · "
-        f"**Spec:** {pdfx_label} · "
-        f"**Output:** `{ce.output_dir}`  \n"
+        f"**Spec:** {pdfx_label}  \n"
+        f"**Print folder:** `{ce.print_dir}`  \n"
+        f"**Preview folder:** `{ce.preview_dir}` · {full_preview_line}  \n"
         "Edit these in **CMYK → Settings**."
     )
 
@@ -153,6 +157,9 @@ def render() -> None:
             show_guide_overlay=ce.show_guide_overlay,
             trim_to_content_enabled=ce.trim_to_content_enabled,
             trim_to_content_padding_pt=ce.trim_to_content_padding_pt,
+            print_dir=ce.print_dir,
+            preview_dir=ce.preview_dir,
+            generate_full_preview=ce.generate_full_preview,
         )
 
         # Build per-file mapping list. Each illustration gets its own merge
@@ -209,7 +216,7 @@ def render() -> None:
         report.finished_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         report.total_seconds = round(_time.time() - t_start, 3)
 
-        qa_path = write_report(report, ce.output_dir)
+        qa_path = write_report(report, ce.print_dir)
         st.session_state["cmyk_batch_report"] = {
             "files": [
                 {
@@ -298,7 +305,8 @@ def render() -> None:
                 target = create_snapshot(
                     label=label,
                     project_root=PROJECT_ROOT,
-                    output_dir=ce.output_dir,
+                    output_dir=ce.print_dir,
+                    preview_dir=ce.preview_dir,
                     pdf_pattern=pattern,
                     icc_profile=str(ce.icc_profile_path),
                     pdfx=ce.pdfx_compliance,

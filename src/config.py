@@ -122,6 +122,32 @@ class CmykExportConfig:
     """Padding (in PostScript points) added around the trimmed bbox on all
     sides. 0 = bbox flush. Range typically 0–20."""
 
+    print_subdir: str = "print"
+    """Subfolder under ``output_dir`` that receives the print deliverables
+    (PDFs, audit sidecars, the trimmed `_preview_cut.png`, QA report).
+    Empty string keeps the historical flat layout."""
+
+    preview_subdir: str = "preview"
+    """Subfolder under ``output_dir`` that receives the full uncropped
+    client-facing `_preview_full.png` files. Empty string keeps the
+    historical flat layout."""
+
+    generate_full_preview: bool = True
+    """Also render a second soft-proof PNG at the SVG's natural aspect
+    (no trim, no letterbox). Lands in ``output_dir / preview_subdir``
+    as `<stem>_CMYK_preview_full.png`. Turn off to skip the second
+    Inkscape+Ghostscript pass for that file."""
+
+    @property
+    def print_dir(self) -> Path:
+        """Resolved directory for print deliverables (PDFs + cut preview)."""
+        return self.output_dir / self.print_subdir if self.print_subdir else self.output_dir
+
+    @property
+    def preview_dir(self) -> Path:
+        """Resolved directory for the full client-facing preview PNGs."""
+        return self.output_dir / self.preview_subdir if self.preview_subdir else self.output_dir
+
 
 @dataclass
 class AppConfig:
@@ -144,6 +170,8 @@ class AppConfig:
             self.paths.output_dir,
             self.paths.metadata_dir,
             self.cmyk_export.output_dir,
+            self.cmyk_export.print_dir,
+            self.cmyk_export.preview_dir,
         ):
             p.mkdir(parents=True, exist_ok=True)
 
@@ -248,6 +276,9 @@ def load_config() -> AppConfig:
         trim_to_content_padding_pt=float(
             cmyk.get("trim_to_content", {}).get("padding_pt", 0.0)
         ),
+        print_subdir=str(cmyk.get("subdirs", {}).get("print", "print")),
+        preview_subdir=str(cmyk.get("subdirs", {}).get("preview", "preview")),
+        generate_full_preview=bool(cmyk.get("generate_full_preview", True)),
     )
 
     cfg.log_level = str(color_raw.get("logging", {}).get("level", "INFO")).upper()
