@@ -160,6 +160,8 @@ def render() -> None:
             print_dir=ce.print_dir,
             preview_dir=ce.preview_dir,
             generate_full_preview=ce.generate_full_preview,
+            render_check_enabled=ce.render_check,
+            render_check_dpi=ce.render_check_dpi,
         )
 
         # Build per-file mapping list. Each illustration gets its own merge

@@ -420,6 +420,8 @@ def cmd_cmyk_convert(args: argparse.Namespace, cfg: AppConfig) -> int:
         print_dir=cfg.cmyk_export.print_dir,
         preview_dir=cfg.cmyk_export.preview_dir,
         generate_full_preview=cfg.cmyk_export.generate_full_preview,
+        render_check_enabled=cfg.cmyk_export.render_check,
+        render_check_dpi=cfg.cmyk_export.render_check_dpi,
     )
 
     if args.dry_run:
@@ -476,6 +478,8 @@ def cmd_cmyk_convert(args: argparse.Namespace, cfg: AppConfig) -> int:
             store.save_illustration(illu)
             print(f"  OK   {entry.filename}  ({r.elapsed_seconds:.2f}s, "
                   f"{r.replacements} replacements, {len(r.unmapped_colors)} unmapped)")
+            for w in r.warnings:
+                print(f"       ! {w}")
         else:
             failed += 1
             print(f"  FAIL {entry.filename}: {r.error}")

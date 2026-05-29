@@ -44,6 +44,7 @@ from .bleed_overlay import composite_guides
 from .cmyk_tac import TacComputeError, TacReport, compute_tac
 from .filename_template import TemplateError, apply_template
 from .force_k import FineLineReport, find_fine_lines
+from .render_check import RenderCheckError, check_render_fidelity
 from .svg_parser import _localname, parse_svg
 from .svg_to_pdf import InkscapeNotFoundError, SvgToPdfError, svg_to_pdf
 from .svg_writer import apply_mapping_with_report
@@ -110,6 +111,15 @@ class CmykContext:
     aspect (no trim, no letterbox) into ``preview_dir``. Off by default in
     the dataclass to keep test construction terse; ``config.json`` defaults
     it on for the real pipeline."""
+    render_check_enabled: bool = False
+    """When True, diff the SVG's Inkscape render against the RGB PDF render
+    to catch Inkscape PDF-export shape-dropping (issue #8) and surface it as
+    a per-file warning. Adds one extra Inkscape + Ghostscript render per
+    file. Off by default in the dataclass (tests stay fast); ``config.json``
+    defaults it on for the real pipeline."""
+    render_check_dpi: int = 300
+    """Resolution for the render-fidelity diff. 300 dpi resolves a dropped
+    emoji-dot-sized shape comfortably above rasteriser anti-alias noise."""
     # Cached at batch start so each file's report can record it without
     # spawning N extra `gs -v` subprocesses. Empty string = not yet probed.
     ghostscript_version: str = ""
@@ -363,6 +373,29 @@ def _purge_prior_sidecars(cmyk_pdf: Path) -> None:
         path.unlink(missing_ok=True)
 
 
+def _preview_paths(print_dir: Path, preview_dir: Path, out_stem: str) -> tuple[Path, Path]:
+    """Return ``(cut_preview, full_preview)`` PNG paths for an output stem."""
+    return (
+        print_dir / f"{out_stem}_preview_cut.png",
+        preview_dir / f"{out_stem}_preview_full.png",
+    )
+
+
+def _purge_prior_previews(print_dir: Path, preview_dir: Path, out_stem: str) -> None:
+    """Remove leftover soft-proof PNGs for this stem before a fresh export.
+
+    Mirrors :func:`_purge_prior_sidecars`: a re-run that turns
+    ``generate_preview`` / ``generate_full_preview`` off (or fails before the
+    preview stage) must not leave a stale ``_preview_cut.png`` /
+    ``_preview_full.png`` behind — otherwise the previous run's preview
+    lingers and could be handed to the client as if it were current. The
+    enabled previews are regenerated immediately after, so a normal re-run
+    just refreshes them.
+    """
+    for path in _preview_paths(print_dir, preview_dir, out_stem):
+        path.unlink(missing_ok=True)
+
+
 def _format_bytes(n: int) -> str:
     if n >= 1_048_576:
         return f"{n/1_048_576:.2f} MB"
@@ -600,7 +633,11 @@ def process_one(
         # Done up front so a re-run that disables audit_artifacts (or fails
         # before the report stage) leaves no orphans behind.
         cmyk_pdf = print_out / f"{out_stem}.pdf"
+        cut_preview_path, full_preview_path = _preview_paths(print_out, preview_out, out_stem)
         _purge_prior_sidecars(cmyk_pdf)
+        # Also sweep stale soft-proof PNGs for this stem so a re-export refreshes
+        # them (and turning a preview off doesn't leave an out-of-date orphan).
+        _purge_prior_previews(print_out, preview_out, out_stem)
 
         result.warnings = detect_svg_warnings(svg_path)
 
@@ -693,6 +730,27 @@ def process_one(
             inkscape_exe=ctx.inkscape_exe,
         )
 
+        # 2b. Render-fidelity check. Inkscape's vector PDF backend can drop a
+        #     shape that its own raster render (and browsers) draw correctly —
+        #     see issue #8. Diff the page-sized SVG render against the RGB PDF
+        #     render and warn so the artwork can be reworked in Affinity. Both
+        #     sides are RGB (pre-CMYK) so only structural differences show, not
+        #     the expected ICC colour shift. Best-effort: a render failure here
+        #     must not sink the conversion.
+        if ctx.render_check_enabled:
+            try:
+                rc = check_render_fidelity(
+                    corrected_svg, rgb_pdf,
+                    inkscape_exe=ctx.inkscape_exe,
+                    gs_exe=ctx.ghostscript_exe,
+                    dpi=ctx.render_check_dpi,
+                )
+                if rc.has_discrepancy:
+                    result.warnings.append(f"render check: {rc.summary()}")
+            except RenderCheckError as exc:
+                log.warning("render check unavailable for %s: %s", svg_path.name, exc)
+                result.warnings.append(f"render check unavailable: {exc}")
+
         # 3. RGB PDF → CMYK PDF.
         rgb_pdf_to_cmyk(
             rgb_pdf, cmyk_pdf,
@@ -735,7 +793,7 @@ def process_one(
         #    historical `_preview.png` so the new full preview can sit
         #    alongside with a clear naming convention.
         if ctx.generate_preview:
-            preview = print_out / f"{out_stem}_preview_cut.png"
+            preview = cut_preview_path
             try:
                 pdf_to_preview_png(
                     cmyk_pdf, preview,
@@ -772,7 +830,7 @@ def process_one(
             and ctx.generate_full_preview
             and corrected_full_svg is not None
         ):
-            full_preview = preview_out / f"{out_stem}_preview_full.png"
+            full_preview = full_preview_path
             try:
                 _render_full_preview(
                     corrected_full_svg=corrected_full_svg,
