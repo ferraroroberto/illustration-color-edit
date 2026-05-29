@@ -233,7 +233,9 @@ root) or absolute.
       "print":   "print",                                   //   PDFs, audit sidecars, the cut preview, QA report
       "preview": "preview"                                  //   only the full uncropped client preview PNGs
     },
-    "generate_full_preview": true                           // also render <stem>_CMYK_preview_full.png at the SVG's natural aspect
+    "generate_full_preview": true,                          // also render <stem>_CMYK_preview_full.png at the SVG's natural aspect
+    "render_check": true,                                   // diff each SVG's Inkscape render vs the RGB PDF render; warn on Inkscape PDF-export shape-dropping (issue #8)
+    "render_check_dpi": 300                                 // resolution of that fidelity diff
   }
 }
 ```
@@ -366,7 +368,8 @@ The app has eleven sidebar destinations organised as: **Library** ·
 11. **CMYK Settings** — paths, ICC profile, Ghostscript binary,
     trim/bleed, PDF/X-1a, soft-proof DPI, audit-sidecars toggle, plus
     the new **TAC limit / sample DPI / min stroke pt / min text pt**
-    print-quality knobs, **soft-proof guides** toggle + safety-margin
+    print-quality knobs, the **render-fidelity check** toggle + DPI
+    (see below), **soft-proof guides** toggle + safety-margin
     inset, and the **filename template** with a live preview against
     the first three SVGs. Also exposes the
     *Clean identity entries* maintenance button.
@@ -375,6 +378,12 @@ The grayscale **Settings** tab mirrors this: read-only summary at the
 top, editable form for paths, PNG export, matching, and print safety
 (persisted to `config.json` / `color-config.json` respectively), and a
 matching *Clean identity entries from all grayscale metadata* button.
+
+#### Render-fidelity check (Inkscape PDF-export bug detector)
+
+Inkscape's vector PDF backend occasionally **drops a stacked same-colour shape** — e.g. an emoji eye drawn as a small filled dot over another fill prints as a thin sliver, even though the same SVG renders correctly in Inkscape's own PNG export and in browsers (see issue #8). Because the corruption lands in the *vector* PDF, it's baked into the print deliverable. Swapping renderers (cairosvg/rsvg need awkward native libraries on Windows; resvg is raster-only) and rasterising the page (loses vector) were both rejected, so the pipeline keeps the Inkscape→Ghostscript vector path and instead **flags** affected illustrations.
+
+When `render_check` is on (default), each CMYK conversion renders the page-sized SVG to PNG with Inkscape (the ground truth) and the RGB PDF to PNG with Ghostscript, then diffs them — both *before* the CMYK colour shift, so only structural differences show. Solid regions where they diverge surface as a per-file warning — printed in the `cmyk-convert` CLI output and listed in full in the QA report (the export tab shows a per-file warning count) — with the page-relative location of each dropped shape. **Fix flagged art in Affinity** — merge or nudge the overlapping shapes, or flatten that group — then re-export. It's renderer-truth based, so there are effectively no false positives from the bug's geometry; the cost is one extra Inkscape + Ghostscript render per file.
 
 ### Two-step grayscale-then-CMYK workflow (no app changes needed)
 

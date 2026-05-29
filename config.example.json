@@ -29,6 +29,8 @@
       "print": "print",
       "preview": "preview"
     },
-    "generate_full_preview": true
+    "generate_full_preview": true,
+    "render_check": true,
+    "render_check_dpi": 300
   }
 }

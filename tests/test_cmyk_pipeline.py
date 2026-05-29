@@ -23,6 +23,8 @@ from src.cmyk_convert import (
 from src.cmyk_pipeline import (
     CmykContext,
     _apply_page_size,
+    _preview_paths,
+    _purge_prior_previews,
     detect_svg_warnings,
     process_one,
     process_batch,
@@ -37,6 +39,36 @@ SAMPLE_SVG = """<?xml version="1.0"?>
   <rect x="50" y="0" width="50" height="100" fill="#000000"/>
 </svg>
 """
+
+
+def test_preview_paths_compose_from_dirs_and_stem(tmp_path) -> None:
+    cut, full = _preview_paths(tmp_path / "print", tmp_path / "preview", "fig01_CMYK")
+    assert cut == tmp_path / "print" / "fig01_CMYK_preview_cut.png"
+    assert full == tmp_path / "preview" / "fig01_CMYK_preview_full.png"
+
+
+def test_purge_prior_previews_removes_stale_pngs(tmp_path) -> None:
+    print_dir = tmp_path / "print"
+    preview_dir = tmp_path / "preview"
+    print_dir.mkdir()
+    preview_dir.mkdir()
+    cut, full = _preview_paths(print_dir, preview_dir, "fig01_CMYK")
+    cut.write_bytes(b"stale-cut")
+    full.write_bytes(b"stale-full")
+    # An unrelated file must survive — purge is scoped to this stem only.
+    other = preview_dir / "fig02_CMYK_preview_full.png"
+    other.write_bytes(b"keep")
+
+    _purge_prior_previews(print_dir, preview_dir, "fig01_CMYK")
+
+    assert not cut.exists()
+    assert not full.exists()
+    assert other.exists()
+
+
+def test_purge_prior_previews_is_idempotent_when_absent(tmp_path) -> None:
+    # No files yet — must not raise (mirrors missing_ok sidecar purge).
+    _purge_prior_previews(tmp_path / "print", tmp_path / "preview", "nope_CMYK")
 
 SAMPLE_SVG_WITH_TEXT_AND_IMAGE = """<?xml version="1.0"?>
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 100 100">

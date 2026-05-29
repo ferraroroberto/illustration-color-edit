@@ -138,6 +138,17 @@ class CmykExportConfig:
     as `<stem>_CMYK_preview_full.png`. Turn off to skip the second
     Inkscape+Ghostscript pass for that file."""
 
+    render_check: bool = True
+    """Diff each SVG's Inkscape render against the RGB PDF render to catch
+    Inkscape PDF-export shape-dropping (issue #8) and warn per file. Adds
+    one extra Inkscape + Ghostscript render per file; turn off if your
+    library is known-clean and you want the fastest batch."""
+
+    render_check_dpi: int = 300
+    """Resolution for the render-fidelity diff. 300 dpi resolves a dropped
+    emoji-dot-sized shape comfortably above rasteriser anti-alias noise;
+    raise only if you suspect even smaller dropped features."""
+
     @property
     def print_dir(self) -> Path:
         """Resolved directory for print deliverables (PDFs + cut preview)."""
@@ -279,6 +290,8 @@ def load_config() -> AppConfig:
         print_subdir=str(cmyk.get("subdirs", {}).get("print", "print")),
         preview_subdir=str(cmyk.get("subdirs", {}).get("preview", "preview")),
         generate_full_preview=bool(cmyk.get("generate_full_preview", True)),
+        render_check=bool(cmyk.get("render_check", True)),
+        render_check_dpi=int(cmyk.get("render_check_dpi", 300)),
     )
 
     cfg.log_level = str(color_raw.get("logging", {}).get("level", "INFO")).upper()

@@ -62,6 +62,8 @@ def _persist_settings(cfg) -> Path | None:
             "preview": cfg.cmyk_export.preview_subdir,
         },
         "generate_full_preview": cfg.cmyk_export.generate_full_preview,
+        "render_check": cfg.cmyk_export.render_check,
+        "render_check_dpi": cfg.cmyk_export.render_check_dpi,
     }
     cfg_path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
     return cfg_path
@@ -291,6 +293,25 @@ def render() -> None:
         value=float(ce.force_k_min_text_pt), step=0.5,
         key="cmyk_settings_min_text_pt",
         help="Near-black text smaller than this is flagged for force-K.",
+    )
+    r1, r2 = st.columns([3, 1])
+    ce.render_check = r1.checkbox(
+        "Render-fidelity check (catch Inkscape PDF shape-dropping)",
+        value=ce.render_check,
+        key="cmyk_settings_render_check",
+        help=(
+            "Diffs each SVG's Inkscape render against the RGB PDF render and "
+            "warns when Inkscape's PDF export drops a shape that renders fine "
+            "everywhere else (issue #8 — e.g. an emoji eye that prints as a "
+            "sliver). Rework the flagged region in Affinity. Adds one extra "
+            "Inkscape + Ghostscript render per file."
+        ),
+    )
+    ce.render_check_dpi = r2.number_input(
+        "Render-check DPI", min_value=96, max_value=400,
+        value=int(ce.render_check_dpi), step=20,
+        key="cmyk_settings_render_check_dpi",
+        help="Resolution of the fidelity diff. 300 resolves dot-sized drops above AA noise.",
     )
 
     st.markdown("##### Soft-proof guides")
