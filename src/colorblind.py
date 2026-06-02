@@ -25,7 +25,7 @@ from typing import Iterable, Literal
 
 import numpy as np
 
-from .cmyk_gamut import _hex_to_rgb, delta_e_76
+from .color_mapper import delta_e_76_rgb, hex_to_rgb
 
 CbType = Literal["normal", "deutan", "protan", "tritan", "achromat"]
 CB_TYPES: tuple[CbType, ...] = ("deutan", "protan", "tritan", "achromat")
@@ -98,7 +98,7 @@ def simulate_hex(hex_color: str, cb_type: CbType, severity: float = 1.0) -> str:
     if cb_type == "normal":
         return hex_color.upper()
 
-    rgb = np.array(_hex_to_rgb(hex_color), dtype=np.float32)
+    rgb = np.array(hex_to_rgb(hex_color), dtype=np.float32)
 
     if cb_type == "achromat":
         lum = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
@@ -166,7 +166,7 @@ class RiskAssessment:
 
 
 def _de(hex_a: str, hex_b: str) -> float:
-    return delta_e_76(_hex_to_rgb(hex_a), _hex_to_rgb(hex_b))
+    return delta_e_76_rgb(hex_to_rgb(hex_a), hex_to_rgb(hex_b))
 
 
 def assess_risk(

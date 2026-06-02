@@ -27,7 +27,7 @@ from typing import Optional
 
 from lxml import etree
 
-from .cmyk_gamut import delta_e_76
+from .color_mapper import delta_e_76_rgb
 from .svg_parser import _localname, normalize_hex, parse_style_attribute
 
 log = logging.getLogger(__name__)
@@ -169,7 +169,7 @@ def _is_near_black(hex_color: str) -> bool:
     if not h:
         return False
     rgb = (int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16))
-    return delta_e_76(rgb, _PURE_BLACK) <= _NEAR_BLACK_DELTA_E
+    return delta_e_76_rgb(rgb, _PURE_BLACK) <= _NEAR_BLACK_DELTA_E
 
 
 def _resolve_color(

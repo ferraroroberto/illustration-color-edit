@@ -28,51 +28,17 @@ Implementation notes:
 
 from __future__ import annotations
 
-import math
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional, Tuple
 
 from PIL import Image, ImageCms
 
+from .color_mapper import delta_e_76_rgb, hex_to_rgb
+
 
 # PIL ships an sRGB profile builder; one instance is enough.
 _SRGB_PROFILE = ImageCms.createProfile("sRGB")
-
-
-def _hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
-    h = hex_color.lstrip("#")
-    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-
-
-def _srgb_to_lab(r: int, g: int, b: int) -> Tuple[float, float, float]:
-    """sRGB (0-255) → Lab via D65 reference white (CIE 1976)."""
-    def lin(c: float) -> float:
-        c /= 255.0
-        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
-
-    rl, gl, bl = lin(r), lin(g), lin(b)
-    # sRGB → XYZ.
-    X = rl * 0.4124564 + gl * 0.3575761 + bl * 0.1804375
-    Y = rl * 0.2126729 + gl * 0.7151522 + bl * 0.0721750
-    Z = rl * 0.0193339 + gl * 0.1191920 + bl * 0.9503041
-    # Normalize by D65 reference white.
-    X /= 0.95047
-    Y /= 1.00000
-    Z /= 1.08883
-
-    def f(t: float) -> float:
-        return t ** (1 / 3) if t > 0.008856 else (7.787 * t + 16 / 116)
-
-    fx, fy, fz = f(X), f(Y), f(Z)
-    return 116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)
-
-
-def delta_e_76(rgb1: Tuple[int, int, int], rgb2: Tuple[int, int, int]) -> float:
-    """ΔE76 between two sRGB colors. Pure helper, no I/O."""
-    L1, a1, b1 = _srgb_to_lab(*rgb1)
-    L2, a2, b2 = _srgb_to_lab(*rgb2)
-    return math.sqrt((L1 - L2) ** 2 + (a1 - a2) ** 2 + (b1 - b2) ** 2)
 
 
 @lru_cache(maxsize=8)
@@ -107,7 +73,7 @@ def _roundtrip_rgb(
     except (OSError, ImageCms.PyCMSError):
         return None
 
-    rgb_in = _hex_to_rgb(hex_color)
+    rgb_in = hex_to_rgb(hex_color)
     src_img = Image.new("RGB", (1, 1), rgb_in)
     cmyk_img = ImageCms.applyTransform(src_img, forward)
     rgb_back_img = ImageCms.applyTransform(cmyk_img, backward)
@@ -134,7 +100,7 @@ def cmyk_gamut_delta(hex_color: str, icc_path: Path) -> Optional[float]:
     if rt is None:
         return None
     rgb_in, rgb_out = rt
-    return delta_e_76(rgb_in, rgb_out)
+    return delta_e_76_rgb(rgb_in, rgb_out)
 
 
 def cmyk_roundtrip_rgb(hex_color: str, icc_path: Path) -> Optional[str]:

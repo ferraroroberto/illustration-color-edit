@@ -114,6 +114,16 @@ def delta_e_lab(a: tuple[float, float, float], b: tuple[float, float, float]) ->
     return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
 
 
+def rgb_to_lab(rgb: tuple[int, int, int]) -> tuple[float, float, float]:
+    """sRGB (0..255) tuple -> CIE L*a*b*."""
+    return xyz_to_lab(*rgb_to_xyz(*rgb))
+
+
+def delta_e_76_rgb(rgb_a: tuple[int, int, int], rgb_b: tuple[int, int, int]) -> float:
+    """ΔE76 between two sRGB (0..255) tuples, via CIE L*a*b*."""
+    return delta_e_lab(rgb_to_lab(rgb_a), rgb_to_lab(rgb_b))
+
+
 def rgb_distance(a: tuple[int, int, int], b: tuple[int, int, int]) -> float:
     """Euclidean distance in sRGB."""
     return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))

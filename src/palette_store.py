@@ -15,31 +15,13 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from .mapping_store import _atomic_write_json
 from .palette import Palette
 
 log = logging.getLogger(__name__)
-
-
-def _atomic_write_json(path: Path, payload: object) -> None:
-    """Tempfile + rename. Mirrors :func:`src.mapping_store._atomic_write_json`."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=".tmp.", suffix=".json")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2, sort_keys=False)
-            f.write("\n")
-        os.replace(tmp_name, path)
-    except Exception:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
 
 
 def make_icc_signature(icc_path: Path) -> str:
