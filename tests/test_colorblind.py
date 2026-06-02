@@ -31,12 +31,12 @@ def test_achromat_full_collapses_to_gray():
 
 def test_deutan_collapses_red_green():
     # The whole point of deutan: red and green should become much closer.
-    from src.cmyk_gamut import _hex_to_rgb, delta_e_76
+    from src.color_mapper import delta_e_76_rgb, hex_to_rgb
     a, b = "#E74C3C", "#46AA3A"
-    orig = delta_e_76(_hex_to_rgb(a), _hex_to_rgb(b))
+    orig = delta_e_76_rgb(hex_to_rgb(a), hex_to_rgb(b))
     sim_a = simulate_hex(a, "deutan")
     sim_b = simulate_hex(b, "deutan")
-    sim = delta_e_76(_hex_to_rgb(sim_a), _hex_to_rgb(sim_b))
+    sim = delta_e_76_rgb(hex_to_rgb(sim_a), hex_to_rgb(sim_b))
     assert sim < orig, "deutan should reduce red-green distance"
 
 

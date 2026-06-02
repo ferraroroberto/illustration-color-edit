@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Callable
 
 import streamlit as st
 
@@ -151,6 +152,91 @@ def color_swatch(hex_color: str, size: int = 22) -> str:
         f'background:{hex_color};border:1px solid #aaa;border-radius:3px;'
         f'vertical-align:middle;"></span>'
     )
+
+
+def render_map_editor(
+    load: Callable[[], dict[str, dict[str, str]]],
+    usage: Callable[[], dict[str, int]],
+    upsert: Callable[..., None],
+    remove: Callable[[str], bool],
+    *,
+    key_prefix: str,
+    caption: str | None = None,
+    empty_message: str = "Map is empty. Map a few colors in the Editor first.",
+) -> None:
+    """Render a project-wide source→target color-map editor table + add form.
+
+    Used by both the grayscale Global Map tab and the CMYK correction-map tab,
+    which differ only in which store methods they bind, their widget ``key=``
+    prefixes, and the surrounding copy. Pass the pipeline's bound store methods:
+
+    * ``load`` — return the canonical-keyed map (e.g. ``store.load_global_map``).
+    * ``usage`` — return per-source usage counts (e.g. ``store.usage_counts``).
+    * ``upsert`` — ``(source, target, *, label, notes)`` upsert one entry.
+    * ``remove`` — remove one entry by source hex.
+
+    ``key_prefix`` namespaces every widget key (and the add-form id) so the two
+    instances can coexist. ``caption`` and ``empty_message`` carry the
+    per-pipeline framing copy.
+    """
+    if caption:
+        st.caption(caption)
+
+    gm = load()
+    counts = usage()
+
+    if not gm:
+        st.info(empty_message)
+    else:
+        header = st.columns([1, 2, 1, 2, 3, 1])
+        for i, label in enumerate(["Source", "Target", "Used in", "Label", "Notes", ""]):
+            header[i].markdown(f"**{label}**")
+
+        for src in sorted(gm):
+            entry = gm[src]
+            row = st.columns([1, 2, 1, 2, 3, 1])
+            row[0].markdown(
+                f"{color_swatch(src)} <code>{src}</code>",
+                unsafe_allow_html=True,
+            )
+            new_target = row[1].color_picker(
+                "target", value=entry["target"], key=f"{key_prefix}_t_{src}",
+                label_visibility="collapsed",
+            ).upper()
+            row[2].write(counts.get(src, 0))
+            new_label = row[3].text_input(
+                "label", value=entry.get("label", ""), key=f"{key_prefix}_l_{src}",
+                label_visibility="collapsed",
+            )
+            new_notes = row[4].text_input(
+                "notes", value=entry.get("notes", ""), key=f"{key_prefix}_n_{src}",
+                label_visibility="collapsed",
+            )
+            if row[5].button("✕", key=f"{key_prefix}_del_{src}", help="Remove entry"):
+                remove(src)
+                st.rerun()
+
+            if (
+                new_target != entry["target"]
+                or new_label != entry.get("label", "")
+                or new_notes != entry.get("notes", "")
+            ):
+                upsert(src, new_target, label=new_label, notes=new_notes)
+
+    st.divider()
+    st.markdown("**Add a new entry**")
+    with st.form(f"{key_prefix}_add", clear_on_submit=True):
+        f = st.columns([1, 1, 2, 3, 1])
+        nsrc = f[0].text_input("source hex", value="#")
+        ntgt = f[1].color_picker("target", value="#888888")
+        nlbl = f[2].text_input("label")
+        nnts = f[3].text_input("notes")
+        if f[4].form_submit_button("Add"):
+            if not nsrc.startswith("#") or len(nsrc) != 7:
+                st.error("Source must be #RRGGBB.")
+            else:
+                upsert(nsrc.upper(), ntgt.upper(), label=nlbl, notes=nnts)
+                st.success(f"Added {nsrc.upper()} → {ntgt.upper()}.")
 
 
 def numeric_metric_cell(

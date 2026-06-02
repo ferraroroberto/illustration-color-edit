@@ -12,12 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from src.cmyk_gamut import (
-    _hex_to_rgb,
-    _srgb_to_lab,
-    cmyk_gamut_delta,
-    delta_e_76,
-)
+from src.cmyk_gamut import cmyk_gamut_delta
+from src.color_mapper import delta_e_76_rgb, hex_to_rgb, rgb_to_lab
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SWOP_PROFILE = PROJECT_ROOT / "profiles" / "USWebCoatedSWOP.icc"
@@ -27,31 +23,31 @@ SWOP_PROFILE = PROJECT_ROOT / "profiles" / "USWebCoatedSWOP.icc"
 # Pure helpers
 # --------------------------------------------------------------------------- #
 def test_hex_to_rgb_strips_hash_and_uppercases():
-    assert _hex_to_rgb("#FF8000") == (255, 128, 0)
-    assert _hex_to_rgb("ff8000") == (255, 128, 0)
+    assert hex_to_rgb("#FF8000") == (255, 128, 0)
+    assert hex_to_rgb("ff8000") == (255, 128, 0)
 
 
-def test_srgb_to_lab_white_is_about_100_0_0():
-    L, a, b = _srgb_to_lab(255, 255, 255)
+def test_rgb_to_lab_white_is_about_100_0_0():
+    L, a, b = rgb_to_lab((255, 255, 255))
     assert L == pytest.approx(100, abs=0.5)
     assert abs(a) < 0.5
     assert abs(b) < 0.5
 
 
-def test_srgb_to_lab_black_is_about_0_0_0():
-    L, a, b = _srgb_to_lab(0, 0, 0)
+def test_rgb_to_lab_black_is_about_0_0_0():
+    L, a, b = rgb_to_lab((0, 0, 0))
     assert L == pytest.approx(0, abs=0.1)
     assert a == pytest.approx(0, abs=0.1)
     assert b == pytest.approx(0, abs=0.1)
 
 
-def test_delta_e_76_identical_is_zero():
-    assert delta_e_76((100, 100, 100), (100, 100, 100)) == 0.0
+def test_delta_e_76_rgb_identical_is_zero():
+    assert delta_e_76_rgb((100, 100, 100), (100, 100, 100)) == 0.0
 
 
-def test_delta_e_76_white_to_black_is_large():
+def test_delta_e_76_rgb_white_to_black_is_large():
     # Lab L spans 0-100, so ΔE76 between black and white is ~100.
-    assert delta_e_76((0, 0, 0), (255, 255, 255)) == pytest.approx(100, abs=1)
+    assert delta_e_76_rgb((0, 0, 0), (255, 255, 255)) == pytest.approx(100, abs=1)
 
 
 # --------------------------------------------------------------------------- #
