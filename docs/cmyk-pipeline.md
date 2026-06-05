@@ -63,16 +63,12 @@ SVG (RGB)
 The mental model: *the ICC profile does the math; the correction map steers
 where it lands.*
 
-### Why this beats explicit DeviceCMYK overrides
+### Default path: RGB pre-correction before ICC
 
-A "more honest" approach would let the user write `(C, M, Y, K)` values per
-source color, bypassing the ICC profile entirely. We considered it and
-rejected it for v1:
+The normal workflow still uses RGB→RGB pre-correction before the ICC profile.
+This is the right default because it keeps the SVG round-trip simple and lets
+the user iterate from the soft-proof:
 
-* **SVG can't carry DeviceCMYK natively.** The SVG color spec is RGB.
-  Implementing real CMYK overrides requires post-processing the rendered
-  PDF to inject DeviceCMYK colors, which means parsing PDF content streams.
-  That's a 2–3× the implementation surface of the current approach.
 * **Empirical iteration is cheaper than theoretical CMYK math.** Soft-proof
   PNGs let the user *see* the result of a correction in seconds. Tweak the
   RGB pre-correction → re-soft-proof → done. Predicting CMYK values up
@@ -81,9 +77,20 @@ rejected it for v1:
   pre-correction, the user can always do that one color in Affinity
   manually and re-export. The pipeline isn't load-bearing for every pixel.
 
-If proofs from the press come back showing pre-correction is insufficient,
-we can add explicit DeviceCMYK overrides as a follow-up — see "Future
-work" below.
+### Exact DeviceCMYK overrides
+
+For colors that must land on press as a specific ink recipe, the CMYK Editor
+can attach an exact DeviceCMYK quad to a source RGB color, e.g. `#E74C3C →
+0/85/85/0`. The pipeline excludes that source color from RGB pre-correction,
+renders the SVG to an RGB PDF, rewrites matching `rg`/`RG` paint operators to
+`k`/`K` DeviceCMYK operators with `pikepdf`, then runs Ghostscript for the rest
+of the document. Ghostscript can quantize decimals while rewriting the PDF, so
+the pipeline performs a final post-Ghostscript pass that snaps near-target
+DeviceCMYK operators back to the exact requested values.
+
+This is intentionally scoped to plain vector paint operators. Embedded
+rasters, patterns, gradients, and unusual color-space constructs still travel
+through the ICC-managed path and should be checked in the soft-proof.
 
 ## Two previews, by design
 
@@ -113,7 +120,7 @@ new Python package — keep `requirements.txt` lean.
 
 ### Ghostscript for RGB PDF → CMYK PDF
 Ghostscript is the canonical free tool for ICC-driven color space
-conversion in PDFs. It honors the ICC profile, supports PDF/X-1a output,
+conversion in PDFs. It honors the ICC profile, supports PDF/X-1a/PDF/X-4 output,
 and produces output that printers and pre-press tools accept. Alternatives
 (qpdf, mutool) don't ship the same color-management depth.
 
@@ -136,31 +143,32 @@ preference, sensible free defaults:
 Drop the `.icc` file into `profiles/` and point
 `cmyk_export.icc_profile_path` at it.
 
-## PDF/X-1a:2003
+## PDF/X
 
-`cmyk_export.pdfx_compliance: true` makes Ghostscript emit a PDF/X-1a:2003
-file:
+`cmyk_export.pdfx_compliance` accepts `false`, `true`/`"PDF/X-1a:2003"`, or
+`"PDF/X-4"`.
 
-* Forces all colors to be DeviceCMYK or spot.
-* Forbids transparency. **This is the gotcha:** if your SVG uses
-  semi-transparent fills, Ghostscript will warn and the result may not be
-  strictly PDF/X compliant. Flatten transparency in Affinity before export
-  if your publisher requires PDF/X.
-* Embeds an Output Intent referring to the ICC profile.
+* PDF/X-1a:2003 forces all colors to DeviceCMYK or spot and forbids
+  transparency. Flatten transparency in Affinity before export if your
+  publisher requires this variant.
+* PDF/X-4 keeps live transparency and is the right opt-in when the publisher
+  requires both PDF/X and transparent artwork.
+* Both variants embed an Output Intent referring to the ICC profile.
 
-For most trade publishers, plain DeviceCMYK PDF is acceptable; turn PDF/X
-on only if asked.
+For most trade publishers, plain DeviceCMYK PDF is acceptable; turn PDF/X on
+only if asked.
 
 ### Implementation notes (Ghostscript 10.x)
 
-`-dPDFX=true` alone does **not** produce a PDF/X file — it only enables
+`-dPDFX=<variant>` alone does **not** produce a PDF/X file — it only enables
 extra checks. The actual `/GTS_PDFXVersion`, `/Trapped`, and
 `/OutputIntents` markers come from a `PDFX_def.ps` file that Ghostscript
 runs as a positional PostScript argument. The pipeline auto-generates one
 per output (`<name>.pdfx_def.ps` next to the CMYK PDF) using
-`write_pdfx_def_ps()` in `src/cmyk_convert.py`. The generated file
-embeds the ICC profile via `(<icc-path>) (r) file` and declares
-`/GTS_PDFXVersion (PDF/X-1:2001)` (PDF/X-1a:2003 extends that base spec).
+`write_pdfx_def_ps()` in `src/cmyk_convert.py`. The generated file embeds
+the ICC profile via `(<icc-path>) (r) file` and declares either
+`/GTS_PDFXVersion (PDF/X-1:2001)` for PDF/X-1a:2003 or
+`/GTS_PDFXVersion (PDF/X-4)` for PDF/X-4.
 
 Two GS 10.x quirks the def-file path triggered:
 
@@ -188,7 +196,7 @@ The pipeline scans each SVG and surfaces these in the QA report:
 | `<text>` element  | Font embedding / publisher rejects unfontable text  | Affinity → Layer → Convert to Curves           |
 | Live effects     | Affinity sometimes rasterises filters to PNG inside SVG | Flatten effects in Affinity before export  |
 | Gradients with many stops | Usually fine; just verify in soft-proof   | Visual check                                   |
-| Transparency + PDF/X | PDF/X-1a forbids transparency                    | Flatten in Affinity, or disable PDF/X          |
+| Transparency + PDF/X | PDF/X-1a forbids transparency; PDF/X-4 permits it | Use PDF/X-4 when the publisher accepts/requires live transparency |
 
 ## How to verify a CMYK PDF
 
@@ -213,8 +221,8 @@ The CMYK pipeline mirrors the grayscale pipeline structurally:
 
 | Concern                     | Grayscale                       | CMYK                              |
 |-----------------------------|---------------------------------|-----------------------------------|
-| Per-illustration metadata   | `status` + `overrides`          | `cmyk_status` + `cmyk_overrides`  |
-| Project-wide map            | `global_color_map`              | `cmyk_correction_map`             |
+| Per-illustration metadata   | `status` + `overrides`          | `cmyk_status` + `cmyk_overrides` + `cmyk_device_overrides` |
+| Project-wide map            | `global_color_map`              | `cmyk_correction_map` + `cmyk_device_overrides` |
 | Editor tab                  | `tab_editor.py`                 | `tab_cmyk_editor.py`              |
 | Global map tab              | `tab_global_map.py`             | `tab_cmyk_global_map.py`          |
 | Batch tab                   | `tab_batch.py`                  | `tab_cmyk_export.py`              |
@@ -234,9 +242,9 @@ was produced:
 * `<name>_CMYK_report.txt` — plain UTF-8 text. Records the ICC profile (path,
   size, OutputCondition), Ghostscript version + resolved binary path, the
   full GS command that ran, page geometry (trim/bleed/MediaBox), the count
-  of RGB→RGB color replacements applied during pre-correction, any unmapped
-  colors, SVG content warnings (embedded raster `<image>` / un-outlined
-  `<text>`), and elapsed time.
+  of RGB→RGB color replacements applied during pre-correction, exact
+  DeviceCMYK patch counts, any unmapped colors, SVG content warnings
+  (embedded raster `<image>` / un-outlined `<text>`), and elapsed time.
 * `<name>_CMYK.pdfx_def.ps` — only when `pdfx_compliance` is on. The
   PostScript definition file Ghostscript runs *before* `pdfwrite` to inject
   the OutputIntent / `/GTS_PDFXVersion` markers into the catalog. It's
@@ -255,7 +263,6 @@ report — they're scratch previews.
 
 ## Future work
 
-Items deferred from v1 have been migrated to GitHub issues:
+Items still deferred from v1 have been migrated to GitHub issues:
 
-* Explicit DeviceCMYK overrides + PDF/X-4 support → see the "Advanced press-color control" issue.
 * Multi-folder batch UI, CLI `cmyk-soft-proof`, and automatic ICC profile download → see the "Workflow ergonomics" issue.

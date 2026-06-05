@@ -4,7 +4,7 @@ Two responsibilities:
 
 1. Show the **active CMYK configuration** at a glance — which ICC profile
    is being used, where it lives on disk, its size, the resolved
-   Ghostscript binary, the trim+bleed dimensions, and the PDF/X-1a state.
+   Ghostscript binary, the trim+bleed dimensions, and the PDF/X mode.
    The user explicitly asked to see "what mapping and encoding I'm using"
    so the soft-proof is unambiguous.
 
@@ -21,6 +21,7 @@ from pathlib import Path
 import streamlit as st
 
 from src.config import CmykExportConfig
+from src.cmyk_convert import PDFX_1A, PDFX_4, normalize_pdfx_mode, pdfx_mode_label
 from src.filename_template import TemplateError, apply_template
 from src.library_manager import LibraryManager
 
@@ -126,7 +127,7 @@ def render() -> None:
     icc = ce.icc_profile_path
     icc_exists = icc.is_file()
     icc_size = _format_bytes(icc.stat().st_size) if icc_exists else "—"
-    pdfx_label = "PDF/X-1a:2003" if ce.pdfx_compliance else "plain DeviceCMYK"
+    pdfx_label = pdfx_mode_label(ce.pdfx_compliance)
 
     c1, c2 = st.columns(2)
     with c1:
@@ -243,10 +244,21 @@ def render() -> None:
         ),
     )
     d1, d2, d3 = st.columns(3)
-    ce.pdfx_compliance = d1.checkbox(
-        "PDF/X-1a:2003", value=ce.pdfx_compliance, key="cmyk_settings_pdfx",
-        help="Stricter publisher-friendly PDF spec; forbids transparency.",
+    pdfx_options = ["Plain DeviceCMYK", PDFX_1A, PDFX_4]
+    active_pdfx = normalize_pdfx_mode(ce.pdfx_compliance)
+    ce.pdfx_compliance = d1.selectbox(
+        "PDF/X mode",
+        options=pdfx_options,
+        index=pdfx_options.index(active_pdfx or "Plain DeviceCMYK"),
+        key="cmyk_settings_pdfx",
+        help=(
+            "Plain DeviceCMYK leaves PDF/X off. PDF/X-1a is the legacy "
+            "publisher-safe mode and forbids transparency. PDF/X-4 permits "
+            "live transparency when the printer asks for it."
+        ),
     )
+    if ce.pdfx_compliance == "Plain DeviceCMYK":
+        ce.pdfx_compliance = False
     ce.generate_preview_png = d2.checkbox(
         "Generate soft-proof PNGs", value=ce.generate_preview_png,
         key="cmyk_settings_preview",

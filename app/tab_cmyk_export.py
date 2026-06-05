@@ -14,6 +14,7 @@ import streamlit as st
 
 from common import load_semantic_palette, open_in_explorer
 from src.cmyk_pipeline import CmykContext, process_batch
+from src.cmyk_convert import pdfx_mode_label
 from src.config import PROJECT_ROOT, CmykExportConfig
 from tab_cmyk_settings import persist_settings as _persist_cmyk_settings
 from src.delivery import create_snapshot
@@ -30,7 +31,7 @@ def render() -> None:
     ce: CmykExportConfig = cfg.cmyk_export
 
     # ---- Active settings summary (read-only) ------------------------------ #
-    pdfx_label = "PDF/X-1a:2003" if ce.pdfx_compliance else "plain DeviceCMYK"
+    pdfx_label = pdfx_mode_label(ce.pdfx_compliance)
     trim_line = (
         f"**Trim to content:** ON (+{ce.trim_to_content_padding_pt:g}pt padding) — "
         "page = artwork extent; configured trim/bleed bypassed"
@@ -126,7 +127,7 @@ def render() -> None:
     st.markdown(
         f"**Output:** `{ce.output_dir}` · "
         f"{page_line} · "
-        f"**PDF/X:** {'on' if ce.pdfx_compliance else 'off'}"
+            f"**PDF/X:** {pdfx_label}"
     )
 
     # ---- Run --------------------------------------------------------------- #
@@ -167,6 +168,7 @@ def render() -> None:
         # Build per-file mapping list. Each illustration gets its own merge
         # of (global cmyk_correction_map + per-file cmyk_overrides).
         cmyk_global = store.load_cmyk_correction_map()
+        cmyk_device_global = store.load_cmyk_device_overrides()
         progress = st.progress(0.0)
         status_box = st.empty()
 
@@ -204,8 +206,12 @@ def render() -> None:
             full_mapping = merge_with_semantic(
                 cmyk_global, illu.cmyk_overrides, sem, "cmyk",
             )
+            device_mapping = {
+                **cmyk_device_global,
+                **illu.cmyk_device_overrides,
+            }
             per_ctx = _replace(ctx, apply_auto_fix=illu.cmyk_auto_fix)
-            r = process_one(e.path, full_mapping, per_ctx)
+            r = process_one(e.path, full_mapping, per_ctx, device_mapping)
             report.files.append(r)
             if r.status == "ok":
                 illu.with_cmyk_status("exported")

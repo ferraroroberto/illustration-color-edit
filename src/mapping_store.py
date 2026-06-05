@@ -28,6 +28,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Literal, Optional
 
+from .device_cmyk import (
+    DeviceCmyk,
+    normalize_device_cmyk_overrides,
+    serialize_device_cmyk_overrides,
+)
+
 log = logging.getLogger(__name__)
 
 
@@ -56,6 +62,13 @@ class IllustrationMapping:
     overrides: dict[str, str] = field(default_factory=dict)
     cmyk_status: Status = "pending"
     cmyk_overrides: dict[str, str] = field(default_factory=dict)
+    cmyk_device_overrides: dict[str, dict[str, float]] = field(default_factory=dict)
+    """Per-file exact DeviceCMYK overrides, keyed by source RGB hex.
+
+    Values are percentage quads (``{"c": 0, "m": 85, "y": 85, "k": 0}``).
+    They bypass the RGB pre-correction map for that source color and patch the
+    rendered RGB PDF so the final PDF carries exact DeviceCMYK paint operators.
+    """
     cmyk_auto_fix: bool = False
     """Per-file opt-in for the CMYK pipeline's TAC + force-K auto-fixes.
 
@@ -89,6 +102,9 @@ class IllustrationMapping:
         # Normalize hex case in stored data.
         d["overrides"] = {k.upper(): v.upper() for k, v in self.overrides.items()}
         d["cmyk_overrides"] = {k.upper(): v.upper() for k, v in self.cmyk_overrides.items()}
+        d["cmyk_device_overrides"] = serialize_device_cmyk_overrides(
+            self.cmyk_device_overrides
+        )
         return d
 
     @classmethod
@@ -99,12 +115,20 @@ class IllustrationMapping:
         cmyk_raw = raw.get("cmyk_overrides") or {}
         if not isinstance(cmyk_raw, dict):
             raise ValueError(f"'cmyk_overrides' must be a dict, got {type(cmyk_raw).__name__}")
+        device_raw = raw.get("cmyk_device_overrides") or {}
+        if not isinstance(device_raw, dict):
+            raise ValueError(
+                f"'cmyk_device_overrides' must be a dict, got {type(device_raw).__name__}"
+            )
         return cls(
             filename=str(raw.get("filename", "")),
             status=_coerce_status(raw.get("status", "pending")),
             overrides={str(k).upper(): str(v).upper() for k, v in overrides_raw.items()},
             cmyk_status=_coerce_status(raw.get("cmyk_status", "pending")),
             cmyk_overrides={str(k).upper(): str(v).upper() for k, v in cmyk_raw.items()},
+            cmyk_device_overrides=serialize_device_cmyk_overrides(
+                normalize_device_cmyk_overrides(device_raw)
+            ),
             cmyk_auto_fix=bool(raw.get("cmyk_auto_fix", False)),
             updated_at=str(raw.get("updated_at", "")),
             notes=str(raw.get("notes", "")),
@@ -271,6 +295,44 @@ class MappingStore:
         if source_hex.upper() in gm:
             del gm[source_hex.upper()]
             self.save_cmyk_correction_map(gm)
+            return True
+        return False
+
+    # ----- exact DeviceCMYK overrides (parallel to correction map) --------- #
+    def load_cmyk_device_overrides(self) -> dict[str, DeviceCmyk]:
+        """Return project-wide exact DeviceCMYK overrides.
+
+        These are not RGB pre-corrections. They are final CMYK percentage
+        quads injected into the rendered PDF for matching source colors.
+        """
+        raw = self.load_config_raw()
+        return normalize_device_cmyk_overrides(raw.get("cmyk_device_overrides", {}) or {})
+
+    def save_cmyk_device_overrides(
+        self,
+        mapping: dict[str, DeviceCmyk | dict[str, float] | str],
+    ) -> None:
+        raw = self.load_config_raw()
+        raw["cmyk_device_overrides"] = serialize_device_cmyk_overrides(mapping)
+        _atomic_write_json(self.config_path, raw)
+
+    def upsert_cmyk_device_override(
+        self,
+        source_hex: str,
+        value: DeviceCmyk | dict[str, float] | str,
+    ) -> None:
+        gm = self.load_cmyk_device_overrides()
+        gm[source_hex.upper()] = normalize_device_cmyk_overrides({source_hex: value})[
+            source_hex.upper()
+        ]
+        self.save_cmyk_device_overrides(gm)
+
+    def remove_cmyk_device_override(self, source_hex: str) -> bool:
+        gm = self.load_cmyk_device_overrides()
+        src = source_hex.upper()
+        if src in gm:
+            del gm[src]
+            self.save_cmyk_device_overrides(gm)
             return True
         return False
 
@@ -495,6 +557,7 @@ class MappingStore:
                 illu.status = "pending"
             else:
                 illu.cmyk_overrides = {}
+                illu.cmyk_device_overrides = {}
                 illu.cmyk_status = "pending"
             # If both pipelines are now empty + pending and there are no
             # free-form notes, the metadata file carries no information —
@@ -503,6 +566,7 @@ class MappingStore:
                 not illu.overrides
                 and illu.status == "pending"
                 and not illu.cmyk_overrides
+                and not illu.cmyk_device_overrides
                 and illu.cmyk_status == "pending"
                 and not illu.notes
             )

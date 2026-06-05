@@ -32,8 +32,15 @@ from common import (
 )
 from src.color_mapper import ColorMapper, MatchKind, suggest_from_history
 from common import load_semantic_palette
+from src.cmyk_convert import pdfx_mode_label
 from src.cmyk_gamut import cmyk_gamut_delta
 from src.cmyk_pipeline import CmykContext, soft_proof_one
+from src.device_cmyk import (
+    DeviceCmyk,
+    merge_device_cmyk_overrides,
+    normalize_device_cmyk_overrides,
+    serialize_device_cmyk_overrides,
+)
 from src.library_manager import LibraryManager
 from src.mapping_store import MappingStore
 from src.semantic_palette import merge_with_semantic
@@ -117,7 +124,7 @@ def render() -> None:
     # ---- Active configuration banner --------------------------------------- #
     # Shows exactly which ICC + dimensions + spec the soft-proof will use,
     # so the user can verify "what I'm encoding to" without leaving the tab.
-    pdfx_label = "PDF/X-1a:2003" if ce.pdfx_compliance else "plain DeviceCMYK"
+    pdfx_label = pdfx_mode_label(ce.pdfx_compliance)
     st.info(
         f"**File:** `{current}` &nbsp; **Status:** {status_badge(illu.cmyk_status)}  \n"
         f"**ICC:** `{ce.icc_profile_path.name}` · "
@@ -155,6 +162,11 @@ def render() -> None:
         store.save_illustration(illu)
 
     cmyk_global = store.load_cmyk_correction_map()
+    cmyk_device_global = store.load_cmyk_device_overrides()
+    existing_device = merge_device_cmyk_overrides(
+        cmyk_device_global,
+        illu.cmyk_device_overrides,
+    )
     mapper = ColorMapper(global_map=cmyk_global, matching=cfg.matching).with_overrides(
         illu.cmyk_overrides
     )
@@ -163,7 +175,11 @@ def render() -> None:
     # Per-color picks live in session state under a CMYK-specific namespace so
     # they don't collide with the grayscale Editor.
     pick_state_key = "cmyk_editor_picks"
+    device_state_key = f"cmyk_device_picks_{current}"
     saved_picks = dict(st.session_state.get(pick_state_key, {}))
+    saved_device = normalize_device_cmyk_overrides(
+        st.session_state.get(device_state_key, {})
+    )
     picks: dict[str, str] = {}
     for src in colors:
         sk = f"cmyk_pick_{current}_{src}"
@@ -171,6 +187,12 @@ def render() -> None:
             picks[src] = st.session_state[sk].upper()
         elif src in saved_picks:
             picks[src] = saved_picks[src]
+    device_picks: dict[str, DeviceCmyk] = {}
+    for src in colors:
+        if src in saved_device:
+            device_picks[src] = saved_device[src]
+        elif src in existing_device:
+            device_picks[src] = existing_device[src]
 
     suggestions = {h: mapper.suggest(h) for h in sorted(colors)}
     effective: dict[str, str] = {}
@@ -185,7 +207,11 @@ def render() -> None:
     full_mapping = merge_with_semantic(
         cmyk_global, effective, load_semantic_palette(), "cmyk",
     )
-    converted_bytes, report = apply_mapping_with_report(svg_path, full_mapping)
+    preview_mapping = {
+        k: v for k, v in full_mapping.items()
+        if k.upper() not in device_picks
+    }
+    converted_bytes, report = apply_mapping_with_report(svg_path, preview_mapping)
 
     # ---- Three-column preview row (Original | RGB-corrected | Soft-proof) -- #
     # Page is square (configured 5.5×5.5), so aspect-ratio:1/1 keeps all three
@@ -198,7 +224,10 @@ def render() -> None:
 
     proof_key = f"cmyk_proof_{current}"
     proof_sig_key = f"cmyk_proof_sig_{current}"
-    sig = (frozenset(full_mapping.items()), ce.icc_profile_path,
+    device_sig = frozenset(
+        (src, value.as_percent_label()) for src, value in device_picks.items()
+    )
+    sig = (frozenset(full_mapping.items()), device_sig, ce.icc_profile_path,
            ce.pdfx_compliance, ce.target_width_inches,
            ce.target_height_inches, ce.bleed_inches)
     cached_sig = st.session_state.get(proof_sig_key)
@@ -223,7 +252,7 @@ def render() -> None:
         ctx = _build_ctx(cfg)
         with st.spinner("Running Inkscape → Ghostscript pipeline…"):
             try:
-                r = soft_proof_one(svg_path, full_mapping, ctx)
+                r = soft_proof_one(svg_path, full_mapping, ctx, device_picks)
                 st.session_state[proof_key] = r
                 st.session_state[proof_sig_key] = sig
                 cached_proof = r
@@ -303,8 +332,8 @@ def render() -> None:
                 unsafe_allow_html=True,
             )
         with st.container():
-            # col weights: source | match | picker | hex-input | history | gamut
-            row = st.columns([1, 2, 1, 2, 3, 2])
+            # col weights: source | match | picker | hex-input | history | gamut | exact CMYK
+            row = st.columns([1, 2, 1, 2, 3, 2, 2])
             row[0].markdown(
                 f"{color_swatch(src_hex)} <code>{src_hex}</code><br>"
                 f"<small>{count} uses</small>",
@@ -328,14 +357,18 @@ def render() -> None:
             # Shown when either source of correction exists for this color.
             has_override = src_hex in illu.cmyk_overrides
             has_global = src_hex in cmyk_global
+            has_device_override = src_hex in illu.cmyk_device_overrides
+            has_device_global = src_hex in cmyk_device_global
             badge_col, reset_col = row[1].columns([2, 1])
             badge_col.markdown(
                 f"{badge}<br><small>{detail}</small>", unsafe_allow_html=True
             )
-            if has_override or has_global:
+            if has_override or has_global or has_device_override or has_device_global:
                 scope = (
-                    "override + global" if has_override and has_global
-                    else "override" if has_override
+                    "override + global"
+                    if (has_override or has_device_override) and (has_global or has_device_global)
+                    else "override"
+                    if (has_override or has_device_override)
                     else "global"
                 )
                 if reset_col.button(
@@ -349,18 +382,31 @@ def render() -> None:
                 ):
                     if has_override:
                         del illu.cmyk_overrides[src_hex]
+                    if has_device_override:
+                        del illu.cmyk_device_overrides[src_hex]
+                    if has_override or has_device_override:
                         store.save_illustration(illu)
                     if has_global:
                         store.remove_cmyk_correction_entry(src_hex)
+                    if has_device_global:
+                        store.remove_cmyk_device_override(src_hex)
                     for k in (
                         f"cmyk_pick_{current}_{src_hex}",
                         f"cmyk_hex_{current}_{src_hex}",
                         f"cmyk_hist_{current}_{src_hex}",
+                        f"cmyk_exact_enabled_{current}_{src_hex}",
+                        f"cmyk_exact_c_{current}_{src_hex}",
+                        f"cmyk_exact_m_{current}_{src_hex}",
+                        f"cmyk_exact_y_{current}_{src_hex}",
+                        f"cmyk_exact_k_{current}_{src_hex}",
                     ):
                         st.session_state.pop(k, None)
                     saved = st.session_state.get(pick_state_key, {})
                     saved.pop(src_hex, None)
                     st.session_state[pick_state_key] = saved
+                    saved_device = st.session_state.get(device_state_key, {})
+                    saved_device.pop(src_hex, None)
+                    st.session_state[device_state_key] = saved_device
                     st.rerun()
 
             pick_key = f"cmyk_pick_{current}_{src_hex}"
@@ -423,7 +469,54 @@ def render() -> None:
 
             picks[src_hex] = picked
 
+            existing_exact = device_picks.get(src_hex)
+            exact_enabled = row[6].checkbox(
+                "Exact CMYK",
+                value=existing_exact is not None,
+                key=f"cmyk_exact_enabled_{current}_{src_hex}",
+                help="Bypass ICC for this source color and inject an exact DeviceCMYK quad into the PDF.",
+            )
+            if exact_enabled:
+                seed = existing_exact or DeviceCmyk(0.0, 0.0, 0.0, 100.0)
+                c1, c2, c3, c4 = st.columns(4)
+                c_val = c1.number_input(
+                    "C",
+                    min_value=0.0,
+                    max_value=100.0,
+                    value=float(seed.c),
+                    step=1.0,
+                    key=f"cmyk_exact_c_{current}_{src_hex}",
+                )
+                m_val = c2.number_input(
+                    "M",
+                    min_value=0.0,
+                    max_value=100.0,
+                    value=float(seed.m),
+                    step=1.0,
+                    key=f"cmyk_exact_m_{current}_{src_hex}",
+                )
+                y_val = c3.number_input(
+                    "Y",
+                    min_value=0.0,
+                    max_value=100.0,
+                    value=float(seed.y),
+                    step=1.0,
+                    key=f"cmyk_exact_y_{current}_{src_hex}",
+                )
+                k_val = c4.number_input(
+                    "K",
+                    min_value=0.0,
+                    max_value=100.0,
+                    value=float(seed.k),
+                    step=1.0,
+                    key=f"cmyk_exact_k_{current}_{src_hex}",
+                )
+                device_picks[src_hex] = DeviceCmyk(c_val, m_val, y_val, k_val)
+            else:
+                device_picks.pop(src_hex, None)
+
     st.session_state[pick_state_key] = picks
+    st.session_state[device_state_key] = serialize_device_cmyk_overrides(device_picks)
 
     # ---- Save buttons ------------------------------------------------------ #
     # Only persist picks that genuinely override the global map: not
@@ -432,15 +525,23 @@ def render() -> None:
     # global is pure noise — the color renders the same either way, but a
     # per-file override would later survive a "Replace globally" the user
     # thought they'd cleaned up.
-    real_picks = _persistable_overrides(picks, cmyk_global)
+    real_picks = {
+        k: v for k, v in _persistable_overrides(picks, cmyk_global).items()
+        if k.upper() not in device_picks
+    }
     st.divider()
     a1, a2, a3, a4 = st.columns([1, 1, 1, 3])
     if a1.button("Save (keep status)", key="cmyk_ed_save", width="content"):
         illu.cmyk_overrides = dict(real_picks)
+        illu.cmyk_device_overrides = serialize_device_cmyk_overrides(device_picks)
         store.save_illustration(illu)
-        st.success(f"Saved {len(illu.cmyk_overrides)} CMYK overrides for {current}.")
+        st.success(
+            f"Saved {len(illu.cmyk_overrides)} RGB corrections and "
+            f"{len(illu.cmyk_device_overrides)} exact CMYK overrides for {current}."
+        )
     if a2.button("Save & mark reviewed", key="cmyk_ed_review", width="content", type="primary"):
         illu.cmyk_overrides = dict(real_picks)
+        illu.cmyk_device_overrides = serialize_device_cmyk_overrides(device_picks)
         illu.with_cmyk_status("reviewed")
         store.save_illustration(illu)
         gm = store.load_cmyk_correction_map()
@@ -451,18 +552,29 @@ def render() -> None:
                     src, tgt, label="auto-promoted from CMYK editor", notes=""
                 )
                 new_global += 1
+        new_device_global = 0
+        device_gm = store.load_cmyk_device_overrides()
+        for src, value in device_picks.items():
+            if src not in device_gm:
+                store.upsert_cmyk_device_override(src, value)
+                new_device_global += 1
         st.success(
             f"Saved & marked reviewed. {new_global} new entries promoted to "
-            "the CMYK correction map."
+            f"the CMYK correction map; {new_device_global} exact CMYK "
+            "overrides promoted."
         )
     if a3.button("Promote ALL picks to global", key="cmyk_ed_promote", width="content"):
         for src, tgt in real_picks.items():
             store.upsert_cmyk_correction_entry(
                 src, tgt, label="manual promote", notes=""
             )
+        for src, value in device_picks.items():
+            store.upsert_cmyk_device_override(src, value)
         st.success(
             f"Promoted {len(real_picks)} entr"
-            f"{'y' if len(real_picks) == 1 else 'ies'} to the CMYK correction map."
+            f"{'y' if len(real_picks) == 1 else 'ies'} to the CMYK correction map "
+            f"and {len(device_picks)} exact CMYK override"
+            f"{'' if len(device_picks) == 1 else 's'}."
         )
 
     if report.unmapped:

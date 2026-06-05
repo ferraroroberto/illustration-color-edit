@@ -4,10 +4,9 @@ This is the second stage of the CMYK print pipeline. Ghostscript reads an
 RGB PDF (produced by :mod:`src.svg_to_pdf`) and emits a PDF whose color space
 is DeviceCMYK, with all colors converted through the supplied ICC profile.
 
-Optionally produces a PDF/X-1a:2003 compliant file (``pdfx=True``). Note that
-PDF/X-1a forbids transparency — Inkscape-exported SVGs with semi-transparent
-fills may fail compliance; in that case Ghostscript will warn and the output
-may not be strictly compliant. See ``docs/cmyk-pipeline.md``.
+Optionally produces PDF/X-1a:2003 or PDF/X-4 compliant files. PDF/X-1a
+forbids transparency; PDF/X-4 is the transparency-preserving variant. See
+``docs/cmyk-pipeline.md``.
 
 Also exposes :func:`pdf_to_preview_png` for soft-proof rendering: re-rasterise
 a CMYK PDF page back to PNG via Ghostscript so the user can visually verify
@@ -35,6 +34,11 @@ class IccProfileNotFoundError(RuntimeError):
 
 class CmykConvertError(RuntimeError):
     """Raised when Ghostscript exits non-zero during conversion."""
+
+
+PdfxMode = str
+PDFX_1A = "PDF/X-1a:2003"
+PDFX_4 = "PDF/X-4"
 
 
 def _resolve_ghostscript(gs_exe: str) -> str:
@@ -109,10 +113,52 @@ def _output_condition_for_profile(icc_profile: Path) -> tuple[str, str]:
     return ("Custom", icc_profile.stem)
 
 
+def normalize_pdfx_mode(value: bool | str | None) -> Optional[PdfxMode]:
+    """Normalize legacy bool + string config to a concrete PDF/X variant."""
+    if value is True:
+        return PDFX_1A
+    if value in (False, None):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    low = text.lower()
+    if low in {"false", "off", "none", "no", "0"}:
+        return None
+    if low in {"true", "on", "yes", "1", "pdf/x-1", "pdf/x-1a", "pdf/x-1a:2003", "x1a"}:
+        return PDFX_1A
+    if low in {"4", "pdf/x-4", "pdf/x4", "x4", "pdfx-4"}:
+        return PDFX_4
+    raise ValueError(f"Unsupported PDF/X mode {value!r}; expected false, PDF/X-1a:2003, or PDF/X-4")
+
+
+def pdfx_mode_label(value: bool | str | None) -> str:
+    """Human-readable output mode label."""
+    return normalize_pdfx_mode(value) or "plain DeviceCMYK"
+
+
+def _pdfx_gs_value(mode: PdfxMode) -> str:
+    if mode == PDFX_1A:
+        return "1"
+    if mode == PDFX_4:
+        return "4"
+    raise ValueError(f"Unsupported PDF/X mode {mode!r}")
+
+
+def _pdfx_version_marker(mode: PdfxMode) -> str:
+    if mode == PDFX_1A:
+        # PDF/X-1a:2003 declares the same base marker as PDF/X-1:2001.
+        return "PDF/X-1:2001"
+    if mode == PDFX_4:
+        return "PDF/X-4"
+    raise ValueError(f"Unsupported PDF/X mode {mode!r}")
+
+
 def write_pdfx_def_ps(
     def_path: Path,
     icc_profile: Path,
     title: str,
+    mode: bool | str = PDFX_1A,
 ) -> Path:
     """Write a PDFX_def.ps file declaring the OutputIntent and PDF/X markers.
 
@@ -123,20 +169,22 @@ def write_pdfx_def_ps(
     a positional PostScript argument. See gs/lib/PDFX_def.ps in the GS
     distribution for the canonical template.
 
-    The generated file declares PDF/X-1:2001 (the base spec PDF/X-1a:2003
-    extends), embeds the ICC profile as an OutputIntent stream, and tags
-    ``/Trapped /False`` since our pipeline does not perform trapping.
+    The generated file declares the requested PDF/X marker, embeds the ICC
+    profile as an OutputIntent stream, and tags ``/Trapped /False`` since
+    our pipeline does not perform trapping.
     """
     icc_ps = str(icc_profile).replace("\\", "/")
     # PostScript string literals use parens and ()-balance; escape any in
     # the title with backslashes.
     safe_title = title.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
     cond_id, cond_label = _output_condition_for_profile(icc_profile)
+    pdfx_mode = normalize_pdfx_mode(mode) or PDFX_1A
+    version_marker = _pdfx_version_marker(pdfx_mode)
 
     ps = f"""%!
 % Auto-generated PDFX_def.ps for the illustration-color-edit pipeline.
 % Embeds the ICC profile and declares PDF/X-1:2001 markers so Ghostscript
-% emits a genuine PDF/X-1a:2003 file.
+% emits a genuine {pdfx_mode} file.
 
 % Title in DocInfo.
 [ /Title ({safe_title}) /DOCINFO pdfmark
@@ -163,10 +211,9 @@ def write_pdfx_def_ps(
 % Hook the OutputIntent into the document Catalog.
 [ {{Catalog}} << /OutputIntents [ {{OutputIntent_PDFX}} ] >> /PUT pdfmark
 
-% Doc-level PDF/X markers. PDF/X-1a:2003 declares the same /GTS_PDFXVersion
-% string as PDF/X-1:2001 (the base spec it extends).
+% Doc-level PDF/X markers.
 [ /Trapped /False
-  /GTS_PDFXVersion (PDF/X-1:2001)
+  /GTS_PDFXVersion ({version_marker})
   /DOCINFO pdfmark
 """
     def_path.parent.mkdir(parents=True, exist_ok=True)
@@ -179,7 +226,7 @@ def build_gs_command(
     output_pdf: Path,
     icc_profile: Path,
     gs_exe: str,
-    pdfx: bool = False,
+    pdfx: bool | str = False,
     pdfx_def_ps: Optional[Path] = None,
     force_k: bool = False,
 ) -> list[str]:
@@ -216,12 +263,18 @@ def build_gs_command(
         # Push exact-black text and vectors through the K plate only — keeps
         # fine type and hairlines from misregistering on press.
         cmd += ["-dBlackText=true", "-dBlackVector=true"]
-    if pdfx:
+    pdfx_mode = normalize_pdfx_mode(pdfx)
+    if pdfx_mode:
         # GS picks PDF 1.4 automatically for PDF/X mode. Do *not* set
         # -dCompatibilityLevel=1.4 explicitly: in GS 10.x this combo causes
         # "/undefinedfilename in (.4)" — the value-parser leaks ".4" onto
         # the operand stack and PostScript later tries to run it as a file.
-        cmd += ["-dPDFX=true"]
+        cmd += [f"-dPDFX={_pdfx_gs_value(pdfx_mode)}"]
+        if pdfx_mode == PDFX_4:
+            # PDF/X-4 permits live transparency (PDF 1.6-era feature set).
+            # Ghostscript documents -dPDFX=4 as the pdfwrite selector; this
+            # explicit compatibility level keeps the output version aligned.
+            cmd += ["-dCompatibilityLevel=1.6", "-dHaveTransparency=true"]
         if pdfx_def_ps is not None:
             # -dSAFER (default in GS 10.x) blocks the def file's
             # `(icc-path) (r) file` operator with /invalidfileaccess. The
@@ -244,7 +297,7 @@ def rgb_pdf_to_cmyk(
     output_pdf: Path,
     icc_profile: Path,
     gs_exe: str = "gswin64c",
-    pdfx: bool = False,
+    pdfx: bool | str = False,
     keep_pdfx_def_ps: bool = True,
     force_k: bool = False,
 ) -> Path:
@@ -254,7 +307,8 @@ def rgb_pdf_to_cmyk(
     :param output_pdf: destination CMYK PDF (parent dir created if missing).
     :param icc_profile: path to the target CMYK ICC profile.
     :param gs_exe: Ghostscript binary path or name on PATH.
-    :param pdfx: when True, emit PDF/X-1a:2003 (publisher-friendly).
+    :param pdfx: False for plain DeviceCMYK, True/PDF/X-1a:2003 for legacy
+        PDF/X-1a, or "PDF/X-4" for transparency-preserving PDF/X-4.
     :param keep_pdfx_def_ps: when True (default) the PostScript definition
         file used to inject the OutputIntent is left next to the output PDF
         for inspection. When False it is deleted after a successful run; it
@@ -283,19 +337,20 @@ def rgb_pdf_to_cmyk(
     output_pdf.parent.mkdir(parents=True, exist_ok=True)
 
     pdfx_def_ps: Optional[Path] = None
-    if pdfx:
+    pdfx_mode = normalize_pdfx_mode(pdfx)
+    if pdfx_mode:
         # Drop the def file next to the output PDF so it's easy to inspect
         # if a PDF/X validator complains. One per output is fine — they're
         # tiny (<2 KB) and identifiers depend on the ICC profile name.
         pdfx_def_ps = output_pdf.with_suffix(".pdfx_def.ps")
-        write_pdfx_def_ps(pdfx_def_ps, icc_profile, title=output_pdf.stem)
+        write_pdfx_def_ps(pdfx_def_ps, icc_profile, title=output_pdf.stem, mode=pdfx_mode)
 
     cmd = build_gs_command(
         input_pdf, output_pdf, icc_profile, bin_path,
-        pdfx=pdfx, pdfx_def_ps=pdfx_def_ps, force_k=force_k,
+        pdfx=pdfx_mode, pdfx_def_ps=pdfx_def_ps, force_k=force_k,
     )
     log.info("Ghostscript RGB→CMYK: %s → %s (pdfx=%s, profile=%s)",
-             input_pdf.name, output_pdf.name, pdfx, icc_profile.name)
+             input_pdf.name, output_pdf.name, pdfx_mode or False, icc_profile.name)
     log.debug("Ghostscript command: %s", cmd)
 
     result = subprocess.run(cmd, capture_output=True, text=True)

@@ -60,9 +60,11 @@ prepress vocabulary to what this tool does:
   Bleed is *outside* trim (3–5 mm); art that should reach the page edge must
   extend to here. Safety is *inside* trim (4–5 mm); critical content stays
   inside. The soft-proof draws all three.
-- **PDF/X-1a:2003.** A stricter PDF spec publishers prefer (or require). It
-  forbids transparency and embeds the OutputIntent (i.e. the ICC profile)
-  inside the PDF so the printer's RIP can't pick the wrong one.
+- **PDF/X.** A stricter PDF spec publishers prefer (or require). PDF/X-1a:2003
+  forbids transparency; PDF/X-4 keeps live transparency for publishers who
+  require both PDF/X and transparent artwork. Both embed the OutputIntent
+  (i.e. the ICC profile) inside the PDF so the printer's RIP can't pick the
+  wrong one.
 - **Color-blindness simulation (Machado 2009).** Linear-RGB matrix
   transforms parameterized by severity (0–1) for the three common cone
   deficiencies. Achromat is BT.709 luma. Used to flag illustrations whose
@@ -218,7 +220,7 @@ root) or absolute.
     "target_width_inches": 5.5,                             // trim width
     "target_height_inches": 7.5,                            // trim height
     "bleed_inches": 0.0,                                    // bleed on all sides
-    "pdfx_compliance": false,                               // PDF/X-1a:2003 (forbids transparency)
+    "pdfx_compliance": false,                               // false, true/"PDF/X-1a:2003", or "PDF/X-4"
     "generate_preview_png": true,                           // soft-proof PNG per file
     "preview_dpi": 150,                                     // soft-proof resolution
     "audit_artifacts": true,                                // write `<name>_CMYK_report.txt` (and keep `.pdfx_def.ps`) per file
@@ -256,6 +258,11 @@ root) or absolute.
       "label": "saturated red → print-safe red",
       "notes": "Pre-desaturating slightly avoids the muddy ICC clip."
     }
+  },
+  "cmyk_device_overrides": {
+    // Exact CMYK quads injected into the rendered PDF for selected colors.
+    // Percent units: C/M/Y/K = 0..100. These bypass ICC for the source color.
+    "#E74C3C": { "c": 0, "m": 85, "y": 85, "k": 0 }
   },
   "matching": {
     "nearest_enabled": true,
@@ -326,7 +333,8 @@ The app has eleven sidebar destinations organised as: **Library** ·
    `output/`.
 7. **CMYK Editor** — per-illustration editor. Side-by-side original vs.
    RGB-corrected live preview, per-color picker for the CMYK correction
-   map, "Generate CMYK soft-proof" button, and an **Apply auto-fixes**
+   map, optional exact **DeviceCMYK** C/M/Y/K overrides per source color,
+   "Generate CMYK soft-proof" button, and an **Apply auto-fixes**
    checkbox (persisted) that opts the file into Ghostscript's
    `-dBlackText -dBlackVector` force-K flags during the next batch.
 8. **CMYK Global Map** — view and edit the project-wide
@@ -366,7 +374,7 @@ The app has eleven sidebar destinations organised as: **Library** ·
     `semantic-palette.json` plus every PDF (with SHA-256) into
     `deliveries/<UTC-stamp>-<slug>/`.
 11. **CMYK Settings** — paths, ICC profile, Ghostscript binary,
-    trim/bleed, PDF/X-1a, soft-proof DPI, audit-sidecars toggle, plus
+    trim/bleed, PDF/X mode, soft-proof DPI, audit-sidecars toggle, plus
     the new **TAC limit / sample DPI / min stroke pt / min text pt**
     print-quality knobs, the **render-fidelity check** toggle + DPI
     (see below), **soft-proof guides** toggle + safety-margin
@@ -490,8 +498,11 @@ color CMYK PDFs to a publisher.
 5. **Iterate per illustration if needed.** For finer per-file
    adjustments: open the **CMYK Editor** tab, eyeball the live
    RGB-corrected preview, click **Generate CMYK soft-proof** to see
-   the press-side result. The `↺ reset` button on each row clears
-   that color's per-file override AND its global correction-map entry
+   the press-side result. If a press proof requires an exact ink recipe,
+   enable **Exact CMYK** for that source color and enter the C/M/Y/K
+   percentages; the pipeline injects that DeviceCMYK quad into the PDF and
+   excludes that color from RGB pre-correction. The `↺ reset` button on each row clears
+   that color's per-file override AND its global correction/DeviceCMYK entries
    in one click — the color then passes through to ICC unchanged.
 6. **Mark reviewed.** Save & mark reviewed in the CMYK Editor.
 7. **Batch export.** Run the **CMYK Print Export** tab (or

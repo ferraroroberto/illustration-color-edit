@@ -17,6 +17,7 @@ from __future__ import annotations
 import html
 from pathlib import Path
 
+from .cmyk_convert import pdfx_mode_label
 from .cmyk_pipeline import BatchReport, FileResult
 
 
@@ -145,7 +146,7 @@ def render_report(report: BatchReport, output_dir: Path) -> str:
     <dt>Finished</dt><dd>{html.escape(report.finished_at)}</dd>
     <dt>Elapsed</dt><dd>{report.total_seconds:.2f}s</dd>
     <dt>ICC profile</dt><dd><code>{html.escape(report.icc_profile)}</code></dd>
-    <dt>PDF/X-1a</dt><dd>{'enabled' if report.pdfx else 'disabled'}</dd>
+    <dt>PDF/X mode</dt><dd>{html.escape(pdfx_mode_label(report.pdfx))}</dd>
     <dt>Trim size</dt><dd>{report.width_inches:.3f} × {report.height_inches:.3f} in (bleed {report.bleed_inches:.3f} in)</dd>
   </dl>
 </div>

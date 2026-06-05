@@ -48,15 +48,18 @@ def test_illustration_mapping_carries_cmyk_state():
         overrides={"#ff0000": "#222222"},
         cmyk_status="pending",
         cmyk_overrides={"#000000": "#0a0a0a"},
+        cmyk_device_overrides={"#e74c3c": {"c": 0, "m": 85, "y": 85, "k": 0}},
     )
     d = m.to_dict()
     assert d["cmyk_overrides"] == {"#000000": "#0A0A0A"}
+    assert d["cmyk_device_overrides"] == {"#E74C3C": {"c": 0.0, "m": 85.0, "y": 85.0, "k": 0.0}}
     assert d["cmyk_status"] == "pending"
     m2 = IllustrationMapping.from_dict(d)
     assert m2.status == "reviewed"
     assert m2.cmyk_status == "pending"
     assert m2.overrides == {"#FF0000": "#222222"}
     assert m2.cmyk_overrides == {"#000000": "#0A0A0A"}
+    assert m2.cmyk_device_overrides == {"#E74C3C": {"c": 0.0, "m": 85.0, "y": 85.0, "k": 0.0}}
 
 
 def test_with_cmyk_status_independent_of_grayscale():
@@ -114,6 +117,16 @@ def test_save_cmyk_correction_preserves_other_keys(store):
     raw = json.loads(store.config_path.read_text(encoding="utf-8"))
     assert "global_color_map" in raw  # untouched
     assert raw["global_color_map"]["#E74C3C"]["target"] == "#333333"
+
+
+def test_upsert_remove_cmyk_device_override(store):
+    store.upsert_cmyk_device_override("#e74c3c", "0/85/85/0")
+    gm = store.load_cmyk_device_overrides()
+    assert gm["#E74C3C"].as_percent_label() == "0/85/85/0"
+
+    assert store.remove_cmyk_device_override("#E74C3C") is True
+    assert "#E74C3C" not in store.load_cmyk_device_overrides()
+    assert store.remove_cmyk_device_override("#E74C3C") is False
 
 
 # --------------------------------------------------------------------------- #
@@ -280,6 +293,7 @@ def test_wipe_pipeline_deletes_metadata_when_both_sides_empty(store):
         filename="a.svg",
         cmyk_status="reviewed",
         cmyk_overrides={"#000000": "#0A0A0A"},
+        cmyk_device_overrides={"#E74C3C": {"c": 0, "m": 85, "y": 85, "k": 0}},
     )
     store.save_illustration(a)
     assert store.metadata_path_for("a.svg").is_file()

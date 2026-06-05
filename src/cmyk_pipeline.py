@@ -37,11 +37,20 @@ from .cmyk_convert import (
     _resolve_ghostscript,
     build_gs_command,
     get_ghostscript_version,
+    pdfx_mode_label,
     pdf_to_preview_png,
     rgb_pdf_to_cmyk,
 )
 from .bleed_overlay import composite_guides
 from .cmyk_tac import TacComputeError, TacReport, compute_tac
+from .device_cmyk import (
+    DeviceCmykError,
+    DeviceCmyk,
+    DeviceCmykPatchReport,
+    normalize_device_cmyk_overrides,
+    patch_pdf_device_cmyk_values_to_exact,
+    patch_pdf_rgb_colors_to_device_cmyk,
+)
 from .filename_template import TemplateError, apply_template
 from .force_k import FineLineReport, find_fine_lines
 from .render_check import RenderCheckError, check_render_fidelity
@@ -71,7 +80,7 @@ class CmykContext:
     width_inches: float
     height_inches: float
     bleed_inches: float = 0.0
-    pdfx: bool = False
+    pdfx: bool | str = False
     generate_preview: bool = True
     preview_dpi: int = 150
     audit_artifacts: bool = True
@@ -164,6 +173,8 @@ class FileResult:
     fine_lines: Optional[FineLineReport] = None
     auto_fix_applied: bool = False
     """Whether the Ghostscript force-K flags were active for this file."""
+    device_cmyk: Optional[DeviceCmykPatchReport] = None
+    """Exact DeviceCMYK override patch report."""
     trim: Optional[TrimReport] = None
     """Trim-to-content result. ``None`` if trim wasn't attempted (toggle off).
     ``trim.had_content == False`` means trim was attempted but the SVG had
@@ -178,7 +189,7 @@ class BatchReport:
     finished_at: str = ""
     total_seconds: float = 0.0
     icc_profile: str = ""
-    pdfx: bool = False
+    pdfx: bool | str = False
     width_inches: float = 0.0
     height_inches: float = 0.0
     bleed_inches: float = 0.0
@@ -262,6 +273,7 @@ def _render_full_preview(
     tmp_dir: Path,
     stem: str,
     ctx: "CmykContext",
+    device_cmyk_overrides: Optional[dict[str, DeviceCmyk]] = None,
 ) -> None:
     """Render the corrected SVG to a CMYK soft-proof PNG at natural aspect.
 
@@ -298,6 +310,8 @@ def _render_full_preview(
         bleed_inches=0.0,
         inkscape_exe=ctx.inkscape_exe,
     )
+    if device_cmyk_overrides:
+        patch_pdf_rgb_colors_to_device_cmyk(full_rgb_pdf, device_cmyk_overrides)
     full_cmyk_pdf = tmp_dir / f"{stem}_full_CMYK.pdf"
     rgb_pdf_to_cmyk(
         full_rgb_pdf, full_cmyk_pdf,
@@ -418,7 +432,7 @@ def write_conversion_report(
     preview_png: Optional[Path],
     pdfx_def_ps: Optional[Path],
     icc_profile: Path,
-    pdfx: bool,
+    pdfx: bool | str,
     width_inches: float,
     height_inches: float,
     bleed_inches: float,
@@ -437,6 +451,7 @@ def write_conversion_report(
     fine_lines: Optional["FineLineReport"] = None,
     auto_fix_applied: bool = False,
     trim: Optional["TrimReport"] = None,
+    device_cmyk: Optional["DeviceCmykPatchReport"] = None,
 ) -> Path:
     """Write a human-readable audit report for one CMYK conversion.
 
@@ -449,7 +464,7 @@ def write_conversion_report(
     cond_id, cond_label = _output_condition_for_profile(icc_profile)
     page_w = width_inches + 2 * bleed_inches
     page_h = height_inches + 2 * bleed_inches
-    pdfx_label = "PDF/X-1a:2003" if pdfx else "plain DeviceCMYK"
+    pdfx_label = pdfx_mode_label(pdfx)
     unmapped_str = ", ".join(unmapped_colors) if unmapped_colors else "(none)"
     warnings_block = (
         "\n".join(f"  - {w}" for w in warnings) if warnings else "  (none)"
@@ -505,6 +520,24 @@ def write_conversion_report(
     else:
         trim_block = "  Mode:             disabled (using configured trim)"
 
+    if device_cmyk is not None and device_cmyk.requested:
+        device_lines = [
+            f"  Requested colors: {device_cmyk.requested}",
+            f"  RGB PDF operators patched:   {device_cmyk.operators_rewritten}",
+            f"  RGB PDF streams patched:     {device_cmyk.streams_rewritten}",
+            f"  Final PDF operators snapped: {device_cmyk.final_operators_rewritten}",
+            f"  Final PDF streams snapped:   {device_cmyk.final_streams_rewritten}",
+        ]
+        for src, count in sorted(device_cmyk.by_source.items()):
+            device_lines.append(f"  {src}: {count} operator{'s' if count != 1 else ''}")
+        if device_cmyk.missing_sources:
+            device_lines.append(
+                "  Missing in RGB PDF: " + ", ".join(device_cmyk.missing_sources)
+            )
+        device_block = "\n".join(device_lines)
+    else:
+        device_block = "  (none)"
+
     if fine_lines is not None:
         fl_lines = [f"  Auto-fix applied: {'yes' if auto_fix_applied else 'no (detection only)'}"]
         fl_lines.append(f"  Fine strokes:     {fine_lines.stroke_count}")
@@ -547,6 +580,10 @@ Pre-correction (RGB to RGB before Ghostscript)
 Replacements:     {replacements} total
 {shifts_block}
 Unmapped colors:  {unmapped_str}
+
+Exact DeviceCMYK overrides
+--------------------------
+{device_block}
 
 Total Area Coverage (TAC)
 -------------------------
@@ -597,6 +634,7 @@ def process_one(
     svg_path: Path,
     correction_map: dict[str, str],
     ctx: CmykContext,
+    device_cmyk_overrides: Optional[dict[str, DeviceCmyk]] = None,
 ) -> FileResult:
     """Run the three-stage pipeline for one SVG. Never raises — errors land on the result."""
     from datetime import datetime, timezone
@@ -659,10 +697,19 @@ def process_one(
         except Exception as exc:  # pragma: no cover — defensive
             log.warning("fine-line detection failed for %s: %s", svg_path.name, exc)
 
-        # 1. Apply RGB→RGB pre-correction. Even if the map is empty we still
-        #    pass through to normalize hex case in the SVG; that's harmless.
+        device_cmyk_overrides = normalize_device_cmyk_overrides(
+            device_cmyk_overrides or {}
+        )
+
+        # 1. Apply RGB→RGB pre-correction. Exact DeviceCMYK sources are left
+        #    as their original RGB in the intermediate SVG so we can find and
+        #    replace those RGB paint operators in the rendered PDF.
         corrected_svg = tmp / f"{stem}_corrected.svg"
-        body, report = apply_mapping_with_report(svg_path, correction_map)
+        effective_correction_map = {
+            k: v for k, v in correction_map.items()
+            if k.upper() not in device_cmyk_overrides
+        }
+        body, report = apply_mapping_with_report(svg_path, effective_correction_map)
         corrected_svg.write_bytes(body)
         result.replacements = report.replacements
         result.replacements_by_source = dict(report.by_source)
@@ -730,6 +777,20 @@ def process_one(
             inkscape_exe=ctx.inkscape_exe,
         )
 
+        # 2a. Exact DeviceCMYK overrides. Patching before Ghostscript means
+        #    the final PDF carries explicit DeviceCMYK paint operators for
+        #    those colors while the rest of the document remains ICC-managed.
+        if device_cmyk_overrides:
+            result.device_cmyk = patch_pdf_rgb_colors_to_device_cmyk(
+                rgb_pdf,
+                device_cmyk_overrides,
+            )
+            if result.device_cmyk.missing_sources:
+                result.warnings.append(
+                    "DeviceCMYK override source color not found in RGB PDF: "
+                    + ", ".join(result.device_cmyk.missing_sources)
+                )
+
         # 2b. Render-fidelity check. Inkscape's vector PDF backend can drop a
         #     shape that its own raster render (and browsers) draw correctly —
         #     see issue #8. Diff the page-sized SVG render against the RGB PDF
@@ -760,6 +821,20 @@ def process_one(
             keep_pdfx_def_ps=ctx.audit_artifacts,
             force_k=ctx.apply_auto_fix,
         )
+        if device_cmyk_overrides:
+            final_patch = patch_pdf_device_cmyk_values_to_exact(
+                cmyk_pdf,
+                device_cmyk_overrides,
+            )
+            if result.device_cmyk is None:
+                result.device_cmyk = final_patch
+            else:
+                result.device_cmyk.final_operators_rewritten = (
+                    final_patch.final_operators_rewritten
+                )
+                result.device_cmyk.final_streams_rewritten = (
+                    final_patch.final_streams_rewritten
+                )
         result.output_pdf = cmyk_pdf
         result.auto_fix_applied = ctx.apply_auto_fix
 
@@ -838,6 +913,7 @@ def process_one(
                     tmp_dir=tmp,
                     stem=stem,
                     ctx=ctx,
+                    device_cmyk_overrides=device_cmyk_overrides,
                 )
                 result.preview_full_png = full_preview
             except (CmykConvertError, SvgToPdfError) as exc:
@@ -884,6 +960,7 @@ def process_one(
                 fine_lines=result.fine_lines,
                 auto_fix_applied=result.auto_fix_applied,
                 trim=result.trim,
+                device_cmyk=result.device_cmyk,
             )
             result.report_txt = report_path
 
@@ -894,6 +971,7 @@ def process_one(
         GhostscriptNotFoundError,
         IccProfileNotFoundError,
         CmykConvertError,
+        DeviceCmykError,
     ) as exc:
         log.error("CMYK pipeline failed for %s: %s", svg_path.name, exc)
         result.status = "error"
@@ -915,6 +993,7 @@ def soft_proof_one(
     svg_path: Path,
     correction_map: dict[str, str],
     ctx: CmykContext,
+    device_cmyk_overrides: Optional[dict[str, DeviceCmyk]] = None,
 ) -> FileResult:
     """Same as :func:`process_one` but writes everything into a temp scratch dir.
 
@@ -944,7 +1023,7 @@ def soft_proof_one(
         trim_to_content_padding_pt=ctx.trim_to_content_padding_pt,
         generate_full_preview=False,
     )
-    return process_one(svg_path, correction_map, proof_ctx)
+    return process_one(svg_path, correction_map, proof_ctx, device_cmyk_overrides)
 
 
 # --------------------------------------------------------------------------- #
@@ -955,6 +1034,7 @@ def process_batch(
     correction_map: dict[str, str],
     ctx: CmykContext,
     on_progress: Optional[Callable[[int, int, FileResult], None]] = None,
+    device_cmyk_overrides: Optional[dict[str, DeviceCmyk]] = None,
 ) -> BatchReport:
     """Run the pipeline for every SVG, collecting per-file results."""
     from datetime import datetime, timezone
@@ -985,7 +1065,7 @@ def process_batch(
 
     total = len(svg_paths)
     for i, p in enumerate(svg_paths, start=1):
-        r = process_one(p, correction_map, ctx)
+        r = process_one(p, correction_map, ctx, device_cmyk_overrides)
         report.files.append(r)
         if on_progress is not None:
             on_progress(i, total, r)
