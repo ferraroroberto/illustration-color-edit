@@ -16,12 +16,14 @@ import pytest
 from src.cmyk_convert import (
     GhostscriptNotFoundError,
     IccProfileNotFoundError,
+    PDFX_4,
     _output_condition_for_profile,
     build_gs_command,
     write_pdfx_def_ps,
 )
 from src.cmyk_pipeline import (
     CmykContext,
+    DeviceCmykPatchReport,
     _apply_page_size,
     _preview_paths,
     _purge_prior_previews,
@@ -198,12 +200,21 @@ def test_build_gs_command_pdfx(tmp_path):
     cmd = build_gs_command(
         Path("in.pdf"), Path("out.pdf"), Path("p.icc"), gs_exe="gs", pdfx=True,
     )
-    assert "-dPDFX=true" in cmd
+    assert "-dPDFX=1" in cmd
     # PDFX flag must come before input pdf for gs to see it.
-    assert cmd.index("-dPDFX=true") < cmd.index("in.pdf")
+    assert cmd.index("-dPDFX=1") < cmd.index("in.pdf")
     # We deliberately do NOT pass -dCompatibilityLevel=1.4: in GS 10.x it
     # interacts with -dPDFX=true to produce "/undefinedfilename in (.4)".
     assert not any(c.startswith("-dCompatibilityLevel") for c in cmd)
+
+
+def test_build_gs_command_pdfx4(tmp_path):
+    cmd = build_gs_command(
+        Path("in.pdf"), Path("out.pdf"), Path("p.icc"), gs_exe="gs", pdfx=PDFX_4,
+    )
+    assert "-dPDFX=4" in cmd
+    assert "-dCompatibilityLevel=1.6" in cmd
+    assert "-dHaveTransparency=true" in cmd
 
 
 def test_build_gs_command_pdfx_with_def_file(tmp_path):
@@ -262,6 +273,15 @@ def test_write_pdfx_def_ps_includes_required_markers(tmp_path):
     assert "(my book figure)" in body
 
 
+def test_write_pdfx4_def_ps_includes_pdfx4_marker(tmp_path):
+    icc = tmp_path / "USWebCoatedSWOP.icc"
+    icc.write_bytes(b"x")
+    out = tmp_path / "PDFX4_def.ps"
+    write_pdfx_def_ps(out, icc, title="transparent figure", mode=PDFX_4)
+    body = out.read_text(encoding="utf-8")
+    assert "/GTS_PDFXVersion (PDF/X-4)" in body
+
+
 # --------------------------------------------------------------------------- #
 # process_one happy path with mocked subprocess
 # --------------------------------------------------------------------------- #
@@ -299,6 +319,35 @@ def test_process_one_unmapped_colors_recorded(sample_svg, ctx):
         r = process_one(sample_svg, correction, ctx)
     assert r.status == "ok"
     assert "#000000" in r.unmapped_colors
+
+
+def test_process_one_device_cmyk_source_skips_rgb_precorrection(sample_svg, ctx):
+    correction = {"#E74C3C": "#D14B3C", "#000000": "#0A0A0A"}
+    with patch("src.cmyk_pipeline.svg_to_pdf", side_effect=_fake_inkscape), \
+         patch("src.cmyk_pipeline.patch_pdf_rgb_colors_to_device_cmyk") as patch_device, \
+         patch("src.cmyk_pipeline.patch_pdf_device_cmyk_values_to_exact") as patch_final, \
+         patch("src.cmyk_pipeline.rgb_pdf_to_cmyk", side_effect=_fake_gs_convert):
+        patch_device.return_value = DeviceCmykPatchReport(
+            requested=1,
+            operators_rewritten=1,
+            streams_rewritten=1,
+            by_source={"#E74C3C": 1},
+        )
+        patch_final.return_value = DeviceCmykPatchReport(
+            requested=1,
+            final_operators_rewritten=1,
+            final_streams_rewritten=1,
+            by_source={"#E74C3C": 1},
+        )
+        r = process_one(
+            sample_svg,
+            correction,
+            ctx,
+            device_cmyk_overrides={"#E74C3C": {"c": 0, "m": 85, "y": 85, "k": 0}},
+        )
+    assert r.status == "ok"
+    # Red was reserved for exact CMYK patching; only black took RGB pre-correction.
+    assert r.replacements_by_source == {"#000000": 1}
 
 
 def test_process_one_inkscape_missing_does_not_raise(sample_svg, ctx):

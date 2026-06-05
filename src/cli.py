@@ -28,10 +28,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from .cmyk_convert import build_gs_command
+from .cmyk_convert import build_gs_command, pdfx_mode_label
 from .cmyk_pipeline import CmykContext, process_one
 from .color_mapper import ColorMapper, MatchKind
 from .config import PROJECT_ROOT, AppConfig, configure_logging, load_config
+from .device_cmyk import merge_device_cmyk_overrides
 from .library_manager import LibraryEntry, LibraryManager
 from .mapping_store import MappingStore
 from .print_safety import SafetyWarning, check_mapping
@@ -306,6 +307,10 @@ def cmd_cmyk_inspect(args: argparse.Namespace, cfg: AppConfig) -> int:
 
     illu = store.load_illustration(path.name)
     cmyk_global = store.load_cmyk_correction_map()
+    cmyk_device = merge_device_cmyk_overrides(
+        store.load_cmyk_device_overrides(),
+        illu.cmyk_device_overrides,
+    )
     merged = merge_with_semantic(
         cmyk_global, illu.cmyk_overrides, _load_semantic_palette(), "cmyk",
     )
@@ -338,15 +343,23 @@ def cmd_cmyk_inspect(args: argparse.Namespace, cfg: AppConfig) -> int:
         usage = parsed.colors[src]
         s = mapper.suggest(src)
         target = s.target or src  # passes through unchanged
-        if s.kind is MatchKind.NEAR:
+        if src in cmyk_device:
+            kind = "device"
+            target = cmyk_device[src].as_percent_label()
+            detail = "exact DeviceCMYK — bypasses ICC for this color"
+        elif s.kind is MatchKind.NEAR:
+            kind = s.kind.value
             detail = f"near {s.via} (Δ{cfg.matching.metric.upper()}={s.distance:.2f})"
         elif s.kind is MatchKind.EXACT and s.label:
+            kind = s.kind.value
             detail = s.label
         elif s.kind is MatchKind.NONE:
+            kind = s.kind.value
             detail = "no correction — passes through to ICC"
         else:
+            kind = s.kind.value
             detail = ""
-        print(f"{src:<10} {usage.count:>5}  {s.kind.value:<6}  {target:<10}  {detail}")
+        print(f"{src:<10} {usage.count:>5}  {kind:<6}  {target:<10}  {detail}")
 
     if args.show_command:
         print()
@@ -380,6 +393,7 @@ def cmd_cmyk_convert(args: argparse.Namespace, cfg: AppConfig) -> int:
         return 0
 
     cmyk_global = store.load_cmyk_correction_map()
+    cmyk_device_global = store.load_cmyk_device_overrides()
     template = (
         args.filename_template
         if args.filename_template is not None
@@ -426,6 +440,7 @@ def cmd_cmyk_convert(args: argparse.Namespace, cfg: AppConfig) -> int:
 
     if args.dry_run:
         print(f"[dry-run] would convert {len(entries)} file(s) to {ctx.output_dir}")
+        print(f"PDF/X mode: {pdfx_mode_label(ctx.pdfx)}")
         for e in entries:
             print(f"  - {e.filename}")
         cmd = build_gs_command(
@@ -470,8 +485,12 @@ def cmd_cmyk_convert(args: argparse.Namespace, cfg: AppConfig) -> int:
         merged = merge_with_semantic(
             cmyk_global, illu.cmyk_overrides, sem, "cmyk",
         )
+        device_mapping = {
+            **cmyk_device_global,
+            **illu.cmyk_device_overrides,
+        }
         per_ctx = _replace(ctx, apply_auto_fix=illu.cmyk_auto_fix)
-        r = process_one(entry.path, merged, per_ctx)
+        r = process_one(entry.path, merged, per_ctx, device_mapping)
         report.files.append(r)
         if r.status == "ok":
             illu.with_cmyk_status("exported")

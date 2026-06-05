@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from .device_cmyk import DeviceCmyk, normalize_device_cmyk_overrides
+
 log = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -69,7 +71,7 @@ class CmykExportConfig:
     target_width_inches: float = 5.5
     target_height_inches: float = 7.5
     bleed_inches: float = 0.0
-    pdfx_compliance: bool = False
+    pdfx_compliance: bool | str = False
     generate_preview_png: bool = True
     preview_dpi: int = 150
     audit_artifacts: bool = True
@@ -166,6 +168,7 @@ class AppConfig:
 
     global_color_map: dict[str, dict[str, str]] = field(default_factory=dict)
     cmyk_correction_map: dict[str, dict[str, str]] = field(default_factory=dict)
+    cmyk_device_overrides: dict[str, DeviceCmyk] = field(default_factory=dict)
     matching: MatchingConfig = field(default_factory=MatchingConfig)
     print_safety: PrintSafetyConfig = field(default_factory=PrintSafetyConfig)
     png_export: PngExportConfig = field(default_factory=PngExportConfig)
@@ -238,6 +241,9 @@ def load_config() -> AppConfig:
         }
         for k, v in color_raw.get("cmyk_correction_map", {}).items()
     }
+    cfg.cmyk_device_overrides = normalize_device_cmyk_overrides(
+        color_raw.get("cmyk_device_overrides", {})
+    )
 
     matching = color_raw.get("matching", {})
     cfg.matching = MatchingConfig(
@@ -270,7 +276,7 @@ def load_config() -> AppConfig:
         target_width_inches=float(cmyk.get("target_width_inches", 5.5)),
         target_height_inches=float(cmyk.get("target_height_inches", 7.5)),
         bleed_inches=float(cmyk.get("bleed_inches", 0.0)),
-        pdfx_compliance=bool(cmyk.get("pdfx_compliance", False)),
+        pdfx_compliance=_coerce_pdfx_compliance(cmyk.get("pdfx_compliance", False)),
         generate_preview_png=bool(cmyk.get("generate_preview_png", True)),
         preview_dpi=int(cmyk.get("preview_dpi", 150)),
         audit_artifacts=bool(cmyk.get("audit_artifacts", True)),
@@ -296,6 +302,23 @@ def load_config() -> AppConfig:
 
     cfg.log_level = str(color_raw.get("logging", {}).get("level", "INFO")).upper()
     return cfg
+
+
+def _coerce_pdfx_compliance(value: object) -> bool | str:
+    """Keep legacy bool config while accepting explicit PDF/X variants."""
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip()
+    if not text:
+        return False
+    low = text.lower()
+    if low in {"false", "off", "none", "no", "0"}:
+        return False
+    if low in {"true", "on", "yes", "1", "pdf/x-1a", "pdf/x-1a:2003", "x1a"}:
+        return "PDF/X-1a:2003"
+    if low in {"pdf/x-4", "pdf/x4", "x4", "pdfx-4"}:
+        return "PDF/X-4"
+    return text
 
 
 def configure_logging(level: str = "INFO") -> None:

@@ -43,6 +43,14 @@
       "notes": "Pure cyan-blues clip on uncoated stock. Slight desaturation prints cleaner."
     }
   },
+  "cmyk_device_overrides": {
+    "#E74C3C": {
+      "c": 0,
+      "m": 85,
+      "y": 85,
+      "k": 0
+    }
+  },
   "matching": {
     "nearest_enabled": true,
     "metric": "lab",

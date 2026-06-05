@@ -32,6 +32,8 @@ import unicodedata
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+
+from .cmyk_convert import pdfx_mode_label
 from typing import Optional
 
 log = logging.getLogger(__name__)
@@ -54,7 +56,7 @@ class DeliveryManifest:
     label: str
     timestamp: str
     icc_profile: str = ""
-    pdfx: bool = False
+    pdfx: bool | str = False
     width_inches: float = 0.0
     height_inches: float = 0.0
     bleed_inches: float = 0.0
@@ -97,7 +99,7 @@ def create_snapshot(
     deliveries_dir: Optional[Path] = None,
     pdf_pattern: str = "*_CMYK.pdf",
     icc_profile: str = "",
-    pdfx: bool = False,
+    pdfx: bool | str = False,
     width_inches: float = 0.0,
     height_inches: float = 0.0,
     bleed_inches: float = 0.0,
@@ -208,7 +210,7 @@ def _render_readme(m: DeliveryManifest) -> str:
         f"| {f.source_filename} | {f.bytes:,} | {f.sha256[:12]}… |"
         for f in m.files
     ) or "| _(no files)_ | | |"
-    pdfx = "PDF/X-1a:2003" if m.pdfx else "plain DeviceCMYK"
+    pdfx = pdfx_mode_label(m.pdfx)
     return f"""# Delivery: {m.label}
 
 - **Delivery ID:** `{m.delivery_id}`
