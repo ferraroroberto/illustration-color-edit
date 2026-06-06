@@ -120,7 +120,7 @@ illustration-color-edit/
 │   ├── delivery.py         # snapshot project state into deliveries/ for handoff
 │   └── cli.py              # batch CLI entry point (both pipelines + deliver)
 ├── tests/                      # pytest unit tests
-├── docs/                       # design docs and changelog entries
+├── docs/                       # design + reference docs
 ├── tmp/                        # working scratch space (gitignored except .gitkeep)
 ├── profiles/                   # ICC profiles — drop in here, gitignored
 ├── input/                      # source SVGs — gitignored, path set in config.json
