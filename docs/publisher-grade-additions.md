@@ -1,10 +1,5 @@
 # Publisher-grade additions — Design + Theory Notes
 
-**Date:** 2026-05-09
-**Scope:** six-phase expansion turning the per-illustrator pipeline into something
-a publisher's prepress team will accept without rework. Each section pairs the
-*what* (the feature) with the *why* (the press-side theory it addresses).
-
 ---
 
 ## Why this exists
@@ -312,32 +307,6 @@ so two snapshots in the same minute don't collide.
 
 ---
 
-## Verification
-
-44 new tests across 5 files; full suite at **248 passing**:
-
-| Suite                  | Tests |
-|------------------------|-------|
-| `test_filename_template` | 21    |
-| `test_force_k`         | 10    |
-| `test_bleed_overlay`   | 5     |
-| `test_semantic_palette`| 14    |
-| `test_colorblind`      | 8     |
-| `test_delivery`        | 7     |
-
-Plus 5 new test cases in `test_svg_parser` covering the color-space
-warning detector.
-
-End-to-end smoke checks:
-
-```powershell
-& .\.venv\Scripts\python.exe -m src.cli cmyk-convert --help          # lists --filename-template
-& .\.venv\Scripts\python.exe -m src.cli deliver --help               # new subcommand
-& .\.venv\Scripts\python.exe -m src.cli cmyk-convert --dry-run       # plan + GS command
-```
-
----
-
 ## Caveats and tuning notes
 
 * **Force-K Layer B** (sentinel-based per-color rewrite of fine lines
@@ -351,4 +320,3 @@ End-to-end smoke checks:
   starting heuristic. May need tuning once we see real false-positive /
   false-negative rates on the user's library.
 
-Multi-publisher profiles (per-publisher bundles of trim + ICC + TAC + theme) have been migrated to a GitHub issue.
