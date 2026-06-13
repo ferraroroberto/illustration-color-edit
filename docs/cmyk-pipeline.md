@@ -1,11 +1,5 @@
 # CMYK Print Export Pipeline — Design Notes
 
-**Date:** 2026-05-07
-**Author:** notes captured during the design + implementation session
-**Scope:** new feature alongside the existing grayscale workflow
-
----
-
 ## Why this exists
 
 The book illustrations carry semantic color (red = bad, green = good). The
