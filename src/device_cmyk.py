@@ -12,7 +12,7 @@ import tempfile
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Callable, Iterable, Mapping, Optional
 
 from .svg_parser import normalize_hex
 
@@ -178,6 +178,79 @@ def _content_streams(page: Any) -> list[Any]:
     return [contents]
 
 
+def _rewrite_content_streams(
+    pdf_path: Path,
+    rewrite_instruction: Callable[[Any], Optional[tuple[list[Decimal], str]]],
+    *,
+    tmp_infix: str,
+) -> tuple[int, int]:
+    """Drive the open → per-stream parse → per-instruction rewrite → save skeleton.
+
+    ``rewrite_instruction`` receives one parsed content-stream instruction and
+    returns ``(operands, operator)`` for its replacement, or ``None`` to leave
+    the instruction untouched. This owns the pikepdf import guard, the
+    page/stream iteration, the ``changed``-flag stream write, and the
+    save-to-``mkstemp`` + ``os.replace`` finalisation so both public patchers
+    share one parse/save path. ``tmp_infix`` distinguishes the two temp files.
+
+    Returns ``(operators_rewritten, streams_rewritten)``.
+    """
+    try:
+        import pikepdf
+    except ModuleNotFoundError as exc:  # pragma: no cover - dependency guard
+        raise DeviceCmykError(
+            "pikepdf is required for exact DeviceCMYK overrides; install requirements.txt"
+        ) from exc
+
+    pdf_path = Path(pdf_path)
+    operators_rewritten = 0
+    streams_rewritten = 0
+    tmp_path: Optional[Path] = None
+    with pikepdf.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            for stream in _content_streams(page):
+                try:
+                    instructions = pikepdf.parse_content_stream(stream)
+                except Exception as exc:
+                    raise DeviceCmykError(f"Could not parse PDF content stream: {exc}") from exc
+
+                changed = False
+                rewritten = []
+                for inst in instructions:
+                    replacement = rewrite_instruction(inst)
+                    if replacement is not None:
+                        operands, new_op = replacement
+                        rewritten.append(
+                            pikepdf.ContentStreamInstruction(
+                                operands, pikepdf.Operator(new_op)
+                            )
+                        )
+                        operators_rewritten += 1
+                        changed = True
+                        continue
+                    rewritten.append(inst)
+
+                if changed:
+                    stream.write(pikepdf.unparse_content_stream(rewritten))
+                    streams_rewritten += 1
+
+        if operators_rewritten:
+            fd, tmp_name = tempfile.mkstemp(
+                dir=pdf_path.parent,
+                prefix=f".{pdf_path.stem}.{tmp_infix}.",
+                suffix=".pdf",
+            )
+            os.close(fd)
+            tmp_path = Path(tmp_name)
+            pdf.save(tmp_path)
+    if tmp_path is not None:
+        try:
+            os.replace(tmp_path, pdf_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+    return operators_rewritten, streams_rewritten
+
+
 def patch_pdf_rgb_colors_to_device_cmyk(
     pdf_path: Path,
     overrides: Mapping[str, DeviceCmyk | Mapping[str, Any] | str | Iterable[float]],
@@ -197,66 +270,21 @@ def patch_pdf_rgb_colors_to_device_cmyk(
     if not normalized:
         return report
 
-    try:
-        import pikepdf
-    except ModuleNotFoundError as exc:  # pragma: no cover - dependency guard
-        raise DeviceCmykError(
-            "pikepdf is required for exact DeviceCMYK overrides; install requirements.txt"
-        ) from exc
-
-    pdf_path = Path(pdf_path)
     rgb_by_source = {src: _rgb_operands_for_hex(src) for src in normalized}
-    tmp_path: Optional[Path] = None
-    with pikepdf.open(pdf_path) as pdf:
-        for page in pdf.pages:
-            for stream in _content_streams(page):
-                try:
-                    instructions = pikepdf.parse_content_stream(stream)
-                except Exception as exc:
-                    raise DeviceCmykError(f"Could not parse PDF content stream: {exc}") from exc
 
-                changed = False
-                rewritten = []
-                for inst in instructions:
-                    op = str(inst.operator)
-                    if op in ("rg", "RG") and len(inst.operands) == 3:
-                        match_src: Optional[str] = None
-                        for src, rgb in rgb_by_source.items():
-                            if _operands_match_rgb(inst.operands, rgb):
-                                match_src = src
-                                break
-                        if match_src is not None:
-                            new_op = "k" if op == "rg" else "K"
-                            rewritten.append(
-                                pikepdf.ContentStreamInstruction(
-                                    normalized[match_src].as_pdf_operands(),
-                                    pikepdf.Operator(new_op),
-                                )
-                            )
-                            report.operators_rewritten += 1
-                            report.by_source[match_src] += 1
-                            changed = True
-                            continue
-                    rewritten.append(inst)
+    def rewrite(inst: Any) -> Optional[tuple[list[Decimal], str]]:
+        op = str(inst.operator)
+        if op in ("rg", "RG") and len(inst.operands) == 3:
+            for src, rgb in rgb_by_source.items():
+                if _operands_match_rgb(inst.operands, rgb):
+                    report.by_source[src] += 1
+                    new_op = "k" if op == "rg" else "K"
+                    return normalized[src].as_pdf_operands(), new_op
+        return None
 
-                if changed:
-                    stream.write(pikepdf.unparse_content_stream(rewritten))
-                    report.streams_rewritten += 1
-
-        if report.operators_rewritten:
-            fd, tmp_name = tempfile.mkstemp(
-                dir=pdf_path.parent,
-                prefix=f".{pdf_path.stem}.device-cmyk.",
-                suffix=".pdf",
-            )
-            os.close(fd)
-            tmp_path = Path(tmp_name)
-            pdf.save(tmp_path)
-    if tmp_path is not None:
-        try:
-            os.replace(tmp_path, pdf_path)
-        finally:
-            tmp_path.unlink(missing_ok=True)
+    report.operators_rewritten, report.streams_rewritten = _rewrite_content_streams(
+        pdf_path, rewrite, tmp_infix="device-cmyk"
+    )
     return report
 
 
@@ -278,62 +306,16 @@ def patch_pdf_device_cmyk_values_to_exact(
     if not normalized:
         return report
 
-    try:
-        import pikepdf
-    except ModuleNotFoundError as exc:  # pragma: no cover - dependency guard
-        raise DeviceCmykError(
-            "pikepdf is required for exact DeviceCMYK overrides; install requirements.txt"
-        ) from exc
+    def rewrite(inst: Any) -> Optional[tuple[list[Decimal], str]]:
+        op = str(inst.operator)
+        if op in ("k", "K") and len(inst.operands) == 4:
+            for src, cmyk in normalized.items():
+                if _operands_match_cmyk(inst.operands, cmyk):
+                    report.by_source[src] += 1
+                    return normalized[src].as_pdf_operands(), op
+        return None
 
-    pdf_path = Path(pdf_path)
-    tmp_path: Optional[Path] = None
-    with pikepdf.open(pdf_path) as pdf:
-        for page in pdf.pages:
-            for stream in _content_streams(page):
-                try:
-                    instructions = pikepdf.parse_content_stream(stream)
-                except Exception as exc:
-                    raise DeviceCmykError(f"Could not parse PDF content stream: {exc}") from exc
-
-                changed = False
-                rewritten = []
-                for inst in instructions:
-                    op = str(inst.operator)
-                    if op in ("k", "K") and len(inst.operands) == 4:
-                        match_src: Optional[str] = None
-                        for src, cmyk in normalized.items():
-                            if _operands_match_cmyk(inst.operands, cmyk):
-                                match_src = src
-                                break
-                        if match_src is not None:
-                            rewritten.append(
-                                pikepdf.ContentStreamInstruction(
-                                    normalized[match_src].as_pdf_operands(),
-                                    pikepdf.Operator(op),
-                                )
-                            )
-                            report.final_operators_rewritten += 1
-                            report.by_source[match_src] += 1
-                            changed = True
-                            continue
-                    rewritten.append(inst)
-
-                if changed:
-                    stream.write(pikepdf.unparse_content_stream(rewritten))
-                    report.final_streams_rewritten += 1
-
-        if report.final_operators_rewritten:
-            fd, tmp_name = tempfile.mkstemp(
-                dir=pdf_path.parent,
-                prefix=f".{pdf_path.stem}.device-cmyk-final.",
-                suffix=".pdf",
-            )
-            os.close(fd)
-            tmp_path = Path(tmp_name)
-            pdf.save(tmp_path)
-    if tmp_path is not None:
-        try:
-            os.replace(tmp_path, pdf_path)
-        finally:
-            tmp_path.unlink(missing_ok=True)
+    report.final_operators_rewritten, report.final_streams_rewritten = (
+        _rewrite_content_streams(pdf_path, rewrite, tmp_infix="device-cmyk-final")
+    )
     return report

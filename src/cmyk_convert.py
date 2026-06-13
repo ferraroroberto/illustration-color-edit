@@ -61,6 +61,30 @@ def _resolve_ghostscript(gs_exe: str) -> str:
     )
 
 
+def _gs_png_render_argv(bin_path: str, pdf: Path, png: Path, dpi: int) -> list[str]:
+    """Build the Ghostscript ``png16m`` single-page render argv shared by callers.
+
+    The antialiasing flags (``-dGraphicsAlphaBits`` / ``-dTextAlphaBits``) are
+    part of the canonical render so both the render-check ground truth and the
+    soft-proof preview rasterize identically. ``pdf_to_preview_png`` layers its
+    optional ``-sDefaultCMYKProfile`` onto the returned list.
+    """
+    return [
+        bin_path,
+        "-dNOPAUSE",
+        "-dBATCH",
+        "-dSAFER",
+        "-sDEVICE=png16m",
+        f"-r{int(dpi)}",
+        "-dGraphicsAlphaBits=4",
+        "-dTextAlphaBits=4",
+        "-dFirstPage=1",
+        "-dLastPage=1",
+        f"-sOutputFile={png}",
+        str(pdf),
+    ]
+
+
 def get_ghostscript_version(gs_exe: str) -> str:
     """Return a short version string (e.g. "GPL Ghostscript 10.07.0").
 
@@ -393,27 +417,16 @@ def pdf_to_preview_png(
     bin_path = _resolve_ghostscript(gs_exe)
     png_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # -dGraphicsAlphaBits / -dTextAlphaBits enable subpixel antialiasing in
-    # the rasterizer. Without them, png16m emits 1-bit-AA edges that look
-    # jaggy and produce visible halos around colored shapes — which the user
-    # then mistakes for a quality regression in the (vector) CMYK PDF itself.
-    cmd = [
-        bin_path,
-        "-dNOPAUSE",
-        "-dBATCH",
-        "-dSAFER",
-        "-sDEVICE=png16m",
-        f"-r{dpi}",
-        "-dGraphicsAlphaBits=4",
-        "-dTextAlphaBits=4",
-        "-dFirstPage=1",
-        "-dLastPage=1",
-        f"-sOutputFile={png_path}",
-    ]
+    # The shared builder owns the png16m + antialiasing flags (subpixel AA via
+    # -dGraphicsAlphaBits / -dTextAlphaBits; without them png16m emits 1-bit-AA
+    # edges that look jaggy and produce visible halos around colored shapes —
+    # which the user then mistakes for a quality regression in the (vector) PDF).
+    cmd = _gs_png_render_argv(bin_path, pdf_path, png_path, dpi)
     if icc_profile and Path(icc_profile).is_file():
-        # Use the CMYK profile as the source so the RGB PNG simulates press.
-        cmd[-1:0] = [f"-sDefaultCMYKProfile={icc_profile}"]
-    cmd.append(str(pdf_path))
+        # Use the CMYK profile as the source so the RGB PNG simulates press;
+        # insert it before -sOutputFile so it precedes the input PDF.
+        out_idx = next(i for i, a in enumerate(cmd) if a.startswith("-sOutputFile="))
+        cmd.insert(out_idx, f"-sDefaultCMYKProfile={icc_profile}")
 
     log.info("Ghostscript soft-proof PNG: %s → %s @ %d dpi", pdf_path.name, png_path.name, dpi)
     log.debug("Ghostscript command: %s", cmd)
