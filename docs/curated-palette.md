@@ -1,12 +1,5 @@
 # Curated Palette + Visual Diff — Design Notes
 
-**Date:** 2026-05-08
-**Author:** notes captured during the design + implementation session
-**Scope:** new feature on top of the existing CMYK pipeline; a workflow-only
-addition, no change to the underlying RGB-correction → ICC → PDF chain.
-
----
-
 ## Why this exists
 
 The CMYK editor gives the user a Ghostscript-rendered soft-proof per
@@ -145,71 +138,6 @@ identity entries in a single pass. Returns counts. Exposed as a
 **Clean identity entries from all CMYK metadata** button in the
 *CMYK · Settings* tab — a one-shot migration for files written by
 the old save flow.
-
-## Files modified
-
-* `src/cmyk_gamut.py` — extracted `_roundtrip_rgb`, added
-  `cmyk_roundtrip_rgb(hex, icc_path)`.
-* `src/palette.py` — *new*. `Swatch` and `Palette` dataclasses,
-  deterministic `seed_from_hexes(hexes, k)` k-means, hue-family +
-  lightness-bin grid layout (`bucketize_for_grid`), nearest-swatch
-  lookup, JSON roundtrip.
-* `src/palette_store.py` — *new*. Atomic `palette.json` persistence
-  + `make_icc_signature(icc_path)` helper for cache invalidation.
-* `src/color_mapper.py` — `suggest_from_history` filters identity
-  targets.
-* `src/mapping_store.py` — `cleanup_identity_entries()` migration helper.
-* `app/tab_palette.py` — *new*. The Palette tab (header, seed panel,
-  Plotly grid, compact swatch editor, full-width actions section,
-  before/after/on-press visual diff).
-* `app/tab_cmyk_editor.py` — `↺ reset` button per row;
-  `_persistable_overrides` helper applied at the soft-proof button and
-  all three save buttons.
-* `app/tab_cmyk_settings.py` — Maintenance section with cleanup button.
-* `app/app.py` — registered `cmyk_palette` destination under the CMYK
-  group between Global Map and Print Export.
-* `requirements.txt` — added `plotly==5.24.1` (used for the swatch
-  grid; click events handled natively by Streamlit 1.55's
-  `on_select="rerun"`).
-* `tests/test_palette.py` — *new*. 34 tests for clustering
-  determinism, hue-family classification, grid bucketing invariants,
-  nearest-swatch, JSON roundtrip, store load/save, ICC signature
-  staleness, `cmyk_roundtrip_rgb` (skipped without SWOP profile).
-* `tests/test_color_mapper.py` — added
-  `test_suggest_from_history_drops_identity_entries`.
-* `tests/test_mapping_store_cmyk.py` — added
-  `test_cleanup_identity_entries_strips_global_and_per_file` and
-  `test_cleanup_identity_entries_noop_when_clean`.
-* `.gitignore` — added `palette.json`.
-
-## Validation
-
-```powershell
-# Syntax
-& .\.venv\Scripts\python.exe -m py_compile (changed files…)
-
-# Full test suite
-& .\.venv\Scripts\python.exe -m pytest -q
-# 170 passed
-```
-
-End-to-end smoke (manual):
-
-1. Open the Palette tab. Seed at k=20. Confirm the grid renders with
-   tooltips and printed-appearance colors that match the soft-proof.
-2. Click a swatch → edit label/notes → confirm member counts.
-3. Replace globally on a small cluster. Inspect the visual diff
-   (before-RGB → after-RGB ⇒ after-on-press). Confirm.
-4. Open one of the affected illustrations in the CMYK editor.
-   Verify the per-file override for the affected color is gone.
-   Verify the row's effective target now comes from the updated
-   global map.
-5. Click `↺ reset` on a row that has either an override or a global
-   entry. Verify both are cleared and the row resolves to "no
-   correction".
-6. In CMYK · Settings, click *Clean identity entries from all CMYK
-   metadata*. Verify the report counts match expectations and that
-   re-clicking reports zero changes.
 
 ## Design choices worth recording
 
