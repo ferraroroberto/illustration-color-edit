@@ -38,7 +38,7 @@ from typing import Optional
 import numpy as np
 from PIL import Image, ImageFilter
 
-from .cmyk_convert import _resolve_ghostscript
+from .cmyk_convert import _gs_png_render_argv, _resolve_ghostscript
 from .svg_to_pdf import _resolve_inkscape
 
 log = logging.getLogger(__name__)
@@ -151,20 +151,7 @@ def _render_svg_png(svg_path: Path, png_path: Path, dpi: int, inkscape_exe: str)
 def _render_pdf_png(pdf_path: Path, png_path: Path, dpi: int, gs_exe: str) -> None:
     """Render the first PDF page to PNG with Ghostscript (the export under test)."""
     bin_path = _resolve_ghostscript(gs_exe)
-    cmd = [
-        bin_path,
-        "-dNOPAUSE",
-        "-dBATCH",
-        "-dSAFER",
-        "-sDEVICE=png16m",
-        f"-r{int(dpi)}",
-        "-dGraphicsAlphaBits=4",
-        "-dTextAlphaBits=4",
-        "-dFirstPage=1",
-        "-dLastPage=1",
-        f"-sOutputFile={png_path}",
-        str(pdf_path),
-    ]
+    cmd = _gs_png_render_argv(bin_path, pdf_path, png_path, dpi)
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0 or not png_path.is_file():
         raise RenderCheckError(
