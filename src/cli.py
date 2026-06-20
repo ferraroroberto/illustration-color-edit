@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Optional
 
 from .cmyk_convert import build_gs_command, pdfx_mode_label
-from .cmyk_pipeline import CmykContext, process_one
+from .cmyk_pipeline import BatchFilePlan, CmykContext, FileResult, process_batch
 from .color_mapper import ColorMapper, MatchKind
 from .config import PROJECT_ROOT, AppConfig, configure_logging, load_config
 from .device_cmyk import merge_device_cmyk_overrides
@@ -454,34 +454,11 @@ def cmd_cmyk_convert(args: argparse.Namespace, cfg: AppConfig) -> int:
         print("  " + " ".join(repr(a) if " " in a else a for a in cmd))
         return 0
 
-    from .cmyk_pipeline import BatchReport
-    from datetime import datetime, timezone
-    import time as _time
-
-    report = BatchReport(
-        started_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        icc_profile=str(cfg.cmyk_export.icc_profile_path),
-        pdfx=cfg.cmyk_export.pdfx_compliance,
-        width_inches=cfg.cmyk_export.target_width_inches,
-        height_inches=cfg.cmyk_export.target_height_inches,
-        bleed_inches=cfg.cmyk_export.bleed_inches,
-    )
-    palette: dict[str, int] = {}
-    for e in entries:
-        try:
-            for h in parse_svg(e.path).colors:
-                palette[h] = palette.get(h, 0) + 1
-        except Exception:
-            pass
-    report.palette = palette
-    report.palette_mapped = {k: v["target"] for k, v in cmyk_global.items()}
-
-    failed = 0
-    t0 = _time.time()
     from dataclasses import replace as _replace
     sem = _load_semantic_palette()
-    for entry in entries:
-        illu = store.load_illustration(entry.filename)
+
+    def _plan(path: Path) -> BatchFilePlan:
+        illu = store.load_illustration(path.name)
         merged = merge_with_semantic(
             cmyk_global, illu.cmyk_overrides, sem, "cmyk",
         )
@@ -490,25 +467,35 @@ def cmd_cmyk_convert(args: argparse.Namespace, cfg: AppConfig) -> int:
             **illu.cmyk_device_overrides,
         }
         per_ctx = _replace(ctx, apply_auto_fix=illu.cmyk_auto_fix)
-        r = process_one(entry.path, merged, per_ctx, device_mapping)
-        report.files.append(r)
-        if r.status == "ok":
+
+        def _mark_exported(_r: FileResult) -> None:
             illu.with_cmyk_status("exported")
             store.save_illustration(illu)
-            print(f"  OK   {entry.filename}  ({r.elapsed_seconds:.2f}s, "
+
+        return BatchFilePlan(merged, per_ctx, device_mapping, _mark_exported)
+
+    def _on_progress(i: int, total: int, r: FileResult) -> None:
+        if r.status == "ok":
+            print(f"  OK   {r.filename}  ({r.elapsed_seconds:.2f}s, "
                   f"{r.replacements} replacements, {len(r.unmapped_colors)} unmapped)")
             for w in r.warnings:
                 print(f"       ! {w}")
         else:
-            failed += 1
-            print(f"  FAIL {entry.filename}: {r.error}")
-    report.finished_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    report.total_seconds = round(_time.time() - t0, 3)
+            print(f"  FAIL {r.filename}: {r.error}")
+
+    report = process_batch(
+        [e.path for e in entries],
+        {},  # per-file correction maps come from plan_file
+        ctx,
+        on_progress=_on_progress,
+        plan_file=_plan,
+        palette_mapped={k: v["target"] for k, v in cmyk_global.items()},
+    )
     qa_path = write_report(report, cfg.cmyk_export.print_dir)
     print()
     print(f"Total: {report.succeeded} ok / {report.failed} failed in {report.total_seconds:.2f}s")
     print(f"QA report: {qa_path}")
-    return 0 if failed == 0 else 3
+    return 0 if report.failed == 0 else 3
 
 
 # --------------------------------------------------------------------------- #

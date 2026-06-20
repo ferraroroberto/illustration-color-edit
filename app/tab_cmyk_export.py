@@ -172,37 +172,12 @@ def render() -> None:
         progress = st.progress(0.0)
         status_box = st.empty()
 
-        from src.cmyk_pipeline import BatchReport, process_one
-        import time as _time
-        from datetime import datetime, timezone
-
-        report = BatchReport(
-            started_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            icc_profile=str(ce.icc_profile_path),
-            pdfx=ce.pdfx_compliance,
-            width_inches=ce.target_width_inches,
-            height_inches=ce.target_height_inches,
-            bleed_inches=ce.bleed_inches,
-        )
-        # Build palette across queued files (best-effort).
-        from src.svg_parser import parse_svg
-        palette: dict[str, int] = {}
-        for e in entries:
-            try:
-                for h in parse_svg(e.path).colors:
-                    palette[h] = palette.get(h, 0) + 1
-            except Exception:
-                pass
-        report.palette = palette
-        # palette_mapped reflects the global correction map — per-file
-        # overrides get reported per-file via FileResult.replacements.
-        report.palette_mapped = {k: v["target"] for k, v in cmyk_global.items()}
-
-        t_start = _time.time()
         from dataclasses import replace as _replace
+        from src.cmyk_pipeline import BatchFilePlan, FileResult
         sem = load_semantic_palette()
-        for i, e in enumerate(entries, start=1):
-            illu = store.load_illustration(e.filename)
+
+        def _plan(path: Path) -> BatchFilePlan:
+            illu = store.load_illustration(path.name)
             full_mapping = merge_with_semantic(
                 cmyk_global, illu.cmyk_overrides, sem, "cmyk",
             )
@@ -211,18 +186,30 @@ def render() -> None:
                 **illu.cmyk_device_overrides,
             }
             per_ctx = _replace(ctx, apply_auto_fix=illu.cmyk_auto_fix)
-            r = process_one(e.path, full_mapping, per_ctx, device_mapping)
-            report.files.append(r)
-            if r.status == "ok":
+
+            def _mark_exported(_r: FileResult) -> None:
                 illu.with_cmyk_status("exported")
                 store.save_illustration(illu)
+
+            return BatchFilePlan(full_mapping, per_ctx, device_mapping, _mark_exported)
+
+        def _on_progress(i: int, total: int, r: FileResult) -> None:
             status_box.markdown(
-                f"`{i}/{len(entries)}` **{e.filename}** — "
+                f"`{i}/{total}` **{r.filename}** — "
                 f"{r.status} ({r.elapsed_seconds:.2f}s)"
             )
-            progress.progress(i / len(entries))
-        report.finished_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        report.total_seconds = round(_time.time() - t_start, 3)
+            progress.progress(i / total)
+
+        report = process_batch(
+            [e.path for e in entries],
+            {},  # per-file correction maps come from plan_file
+            ctx,
+            on_progress=_on_progress,
+            plan_file=_plan,
+            # palette_mapped reflects the global correction map — per-file
+            # overrides get reported per-file via FileResult.replacements.
+            palette_mapped={k: v["target"] for k, v in cmyk_global.items()},
+        )
 
         qa_path = write_report(report, ce.print_dir)
         st.session_state["cmyk_batch_report"] = {
