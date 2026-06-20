@@ -1029,19 +1029,50 @@ def soft_proof_one(
 # --------------------------------------------------------------------------- #
 # Batch
 # --------------------------------------------------------------------------- #
+@dataclass
+class BatchFilePlan:
+    """Per-file inputs resolved by the caller for one batch entry.
+
+    Lets :func:`process_batch` stay the single orchestration entry point while
+    each caller threads in the file-specific bits it owns — the merged
+    correction map, an optional per-file :class:`CmykContext` (e.g. with
+    ``apply_auto_fix`` toggled), DeviceCMYK overrides, and an ``on_success``
+    hook (e.g. mark the illustration "exported") run only when the file
+    converts cleanly. Returned from the ``plan_file`` callback.
+    """
+
+    correction_map: dict[str, str]
+    ctx: CmykContext
+    device_cmyk_overrides: Optional[dict[str, DeviceCmyk]] = None
+    on_success: Optional[Callable[[FileResult], None]] = None
+
+
 def process_batch(
     svg_paths: list[Path],
     correction_map: dict[str, str],
     ctx: CmykContext,
     on_progress: Optional[Callable[[int, int, FileResult], None]] = None,
     device_cmyk_overrides: Optional[dict[str, DeviceCmyk]] = None,
+    *,
+    plan_file: Optional[Callable[[Path], BatchFilePlan]] = None,
+    palette_mapped: Optional[dict[str, str]] = None,
 ) -> BatchReport:
-    """Run the pipeline for every SVG, collecting per-file results."""
+    """Run the pipeline for every SVG, collecting per-file results.
+
+    By default every file is converted with the shared ``correction_map`` /
+    ``ctx`` / ``device_cmyk_overrides``. Callers that need per-file resolution
+    (merged overrides, per-file auto-fix, "mark exported" on success) pass a
+    ``plan_file`` callback returning a :class:`BatchFilePlan` for each path; the
+    shared trio is then ignored in favour of the plan's. ``palette_mapped``
+    overrides the reported source→target map (defaults to ``correction_map``).
+    """
     from datetime import datetime, timezone
 
     started = time.time()
     # Probe Ghostscript once for the whole batch so each per-file report can
-    # cite the version without spawning N extra subprocesses.
+    # cite the version without spawning N extra subprocesses. Probing the
+    # shared ``ctx`` up front means per-file copies (``dataclasses.replace``)
+    # built by ``plan_file`` inherit the resolved version.
     if not ctx.ghostscript_version:
         ctx.ghostscript_version = get_ghostscript_version(ctx.ghostscript_exe)
     report = BatchReport(
@@ -1051,7 +1082,10 @@ def process_batch(
         width_inches=ctx.width_inches,
         height_inches=ctx.height_inches,
         bleed_inches=ctx.bleed_inches,
-        palette_mapped=dict(correction_map),
+        palette_mapped=(
+            dict(palette_mapped) if palette_mapped is not None
+            else dict(correction_map)
+        ),
     )
 
     palette: dict[str, int] = {}
@@ -1065,8 +1099,17 @@ def process_batch(
 
     total = len(svg_paths)
     for i, p in enumerate(svg_paths, start=1):
-        r = process_one(p, correction_map, ctx, device_cmyk_overrides)
-        report.files.append(r)
+        if plan_file is not None:
+            plan = plan_file(p)
+            r = process_one(
+                p, plan.correction_map, plan.ctx, plan.device_cmyk_overrides,
+            )
+            report.files.append(r)
+            if plan.on_success is not None and r.status == "ok":
+                plan.on_success(r)
+        else:
+            r = process_one(p, correction_map, ctx, device_cmyk_overrides)
+            report.files.append(r)
         if on_progress is not None:
             on_progress(i, total, r)
 
