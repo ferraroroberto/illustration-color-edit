@@ -265,6 +265,7 @@ def render() -> None:
             f"`{last['total_s']:.2f}s` · "
             f"[QA report]({last['qa_path']})"
         )
+        st.dataframe(last["files"], width="stretch")
 
     # ---- Delivery snapshot ------------------------------------------------- #
     st.divider()
@@ -315,4 +316,3 @@ def render() -> None:
                     st.caption(msg)
             except Exception as exc:
                 st.error(f"Snapshot failed: {exc}")
-        st.dataframe(last["files"], width="stretch")
