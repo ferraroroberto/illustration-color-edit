@@ -176,7 +176,6 @@ python -m venv .venv
 # create your real configs from the templates
 copy config.example.json config.json
 copy color-config.json.example color-config.json
-copy .env.example .env
 ```
 
 ## Setup (POSIX)
@@ -188,7 +187,6 @@ python -m venv .venv
 
 cp config.example.json config.json
 cp color-config.json.example color-config.json
-cp .env.example .env
 ```
 
 ## Configuration
@@ -292,7 +290,7 @@ or
 & .\.venv\Scripts\python.exe -m streamlit run app\app.py
 ```
 
-The app has eleven sidebar destinations organised as: **Library** ·
+The app has twelve sidebar destinations organised as: **Library** ·
 **Project** (Semantic Palette + Accessibility, both cross-pipeline) ·
 **Grayscale** pipeline (4 tabs) · **CMYK** pipeline (5 tabs).
 
