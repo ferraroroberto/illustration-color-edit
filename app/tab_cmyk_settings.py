@@ -24,6 +24,7 @@ from src.config import CmykExportConfig
 from src.cmyk_convert import PDFX_1A, PDFX_4, normalize_pdfx_mode, pdfx_mode_label
 from src.filename_template import TemplateError, apply_template
 from src.library_manager import LibraryManager
+from src.mapping_store import _atomic_write_json
 
 
 def _persist_settings(cfg) -> Path | None:
@@ -66,7 +67,7 @@ def _persist_settings(cfg) -> Path | None:
         "render_check": cfg.cmyk_export.render_check,
         "render_check_dpi": cfg.cmyk_export.render_check_dpi,
     }
-    cfg_path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
+    _atomic_write_json(cfg_path, raw)
     return cfg_path
 
 
