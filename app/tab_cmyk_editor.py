@@ -214,8 +214,8 @@ def render() -> None:
     converted_bytes, report = apply_mapping_with_report(svg_path, preview_mapping)
 
     # ---- Three-column preview row (Original | RGB-corrected | Soft-proof) -- #
-    # Page is square (configured 5.5×5.5), so aspect-ratio:1/1 keeps all three
-    # panels visually the same size in equal-width columns.
+    # Mirror the configured trim aspect (default 5.5×7.5 portrait) so all three
+    # panels share the page's shape in equal-width columns; fall back to 1/1.
     page_aspect = (
         f"{ce.target_width_inches:g}/{ce.target_height_inches:g}"
         if ce.target_width_inches and ce.target_height_inches
