@@ -26,12 +26,13 @@ from common import (
     cached_color_extract,
     color_sort_key,
     color_swatch,
+    load_semantic_palette,
     open_in_explorer,
+    persistable_overrides,
     render_inline_svg,
     status_badge,
 )
 from src.color_mapper import ColorMapper, MatchKind, suggest_from_history
-from common import load_semantic_palette
 from src.cmyk_convert import pdfx_mode_label
 from src.cmyk_gamut import cmyk_gamut_delta
 from src.cmyk_pipeline import CmykContext, soft_proof_one
@@ -51,37 +52,6 @@ from src.svg_writer import apply_mapping_with_report
 # probably wants to know before committing such a target.
 _GAMUT_WARN_THRESHOLD = 6.0
 
-
-def _persistable_overrides(
-    picks: dict[str, str],
-    cmyk_global: dict[str, dict[str, str]],
-) -> dict[str, str]:
-    """Filter picks down to entries that genuinely override the global map.
-
-    A pick goes into the per-file ``cmyk_overrides`` block only when it
-    actually adds something the global ``cmyk_correction_map`` doesn't
-    already provide. Two cases get dropped:
-
-      * **Identity** — ``target == source``. No-op correction; the color
-        already passes through unchanged.
-      * **Already-global** — ``target == cmyk_correction_map[source].target``.
-        The global map already steers this color to the same place, so a
-        per-file entry is pure noise (and would later survive a
-        "Replace globally" the user expected to delete it).
-
-    Everything else is a real per-file pick the user wants kept.
-    """
-    out: dict[str, str] = {}
-    for src, tgt in picks.items():
-        src_u = src.upper()
-        tgt_u = tgt.upper()
-        if tgt_u == src_u:
-            continue
-        global_target = cmyk_global.get(src_u, {}).get("target", "").upper()
-        if tgt_u == global_target:
-            continue
-        out[src_u] = tgt_u
-    return out
 
 
 def _build_ctx(cfg) -> CmykContext:
@@ -247,7 +217,7 @@ def render() -> None:
         # Save genuine per-file picks first so the proof matches what we
         # see — but only entries that actually deviate from the global map
         # (skip identities and picks that already match the global target).
-        illu.cmyk_overrides = _persistable_overrides(picks, cmyk_global)
+        illu.cmyk_overrides = persistable_overrides(picks, cmyk_global)
         store.save_illustration(illu)
         ctx = _build_ctx(cfg)
         with st.spinner("Running Inkscape → Ghostscript pipeline…"):
@@ -526,7 +496,7 @@ def render() -> None:
     # per-file override would later survive a "Replace globally" the user
     # thought they'd cleaned up.
     real_picks = {
-        k: v for k, v in _persistable_overrides(picks, cmyk_global).items()
+        k: v for k, v in persistable_overrides(picks, cmyk_global).items()
         if k.upper() not in device_picks
     }
     st.divider()

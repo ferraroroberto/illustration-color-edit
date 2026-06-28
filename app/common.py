@@ -41,6 +41,37 @@ def normalize_hex(raw: str) -> str | None:
     return f"#{m.group(1).upper()}" if m else None
 
 
+def persistable_overrides(
+    picks: dict[str, str],
+    global_map: dict[str, dict[str, str]],
+) -> dict[str, str]:
+    """Filter picks down to entries that genuinely override the global map.
+
+    Drops two cases that should never live in per-file ``overrides``:
+
+      * **Identity** — ``target == source``. The writer rewrites a color to
+        itself, which is a no-op but pollutes history dropdowns.
+      * **Already-global** — ``target == global_map[source].target``. The
+        global map already steers this color to the same place, so a per-file
+        entry is pure duplication (and would later survive a "Replace globally"
+        the user expected to delete it).
+
+    Used by both the grayscale Editor and the CMYK Editor — the algorithm is
+    identical; only the dict they receive differs.
+    """
+    out: dict[str, str] = {}
+    for src, tgt in picks.items():
+        src_u = src.upper()
+        tgt_u = tgt.upper()
+        if tgt_u == src_u:
+            continue
+        global_target = global_map.get(src_u, {}).get("target", "").upper()
+        if tgt_u == global_target:
+            continue
+        out[src_u] = tgt_u
+    return out
+
+
 def apply_hex_input(hk: str, pk: str) -> None:
     """``on_change`` callback: copy a valid hex from a text input into a color picker.
 
