@@ -25,6 +25,7 @@ from common import (
     fresh_mapper,
     load_semantic_palette,
     open_in_explorer,
+    persistable_overrides,
     render_inline_svg,
     status_badge,
 )
@@ -36,34 +37,6 @@ from src.semantic_palette import merge_with_semantic
 from src.svg_parser import parse_svg
 from src.svg_writer import apply_mapping_with_report
 
-
-def _persistable_overrides(
-    picks: dict[str, str],
-    global_map: dict[str, dict[str, str]],
-) -> dict[str, str]:
-    """Filter picks down to entries that genuinely override the global map.
-
-    Drops two cases that should never live in per-file ``overrides``:
-
-      * **Identity** — ``target == source``. The grayscale writer rewrites
-        a color to itself, which is a no-op but pollutes history dropdowns.
-      * **Already-global** — ``target == global_color_map[source].target``.
-        The global map already steers this color to the same place, so a
-        per-file entry is pure duplication.
-
-    Mirrors the CMYK editor's helper of the same name.
-    """
-    out: dict[str, str] = {}
-    for src, tgt in picks.items():
-        src_u = src.upper()
-        tgt_u = tgt.upper()
-        if tgt_u == src_u:
-            continue
-        global_target = global_map.get(src_u, {}).get("target", "").upper()
-        if tgt_u == global_target:
-            continue
-        out[src_u] = tgt_u
-    return out
 
 
 def render() -> None:
@@ -292,7 +265,7 @@ def render() -> None:
 
     # Persist only picks that genuinely override — drop identities and
     # picks that already match the current global map. Mirrors CMYK editor.
-    real_picks = _persistable_overrides(picks, global_map)
+    real_picks = persistable_overrides(picks, global_map)
 
     st.divider()
     a1, a2, a3, a4 = st.columns([1, 1, 1, 3])
