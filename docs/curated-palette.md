@@ -118,9 +118,9 @@ Three bugs were addressed together:
 3. **History dropdown surfaced legacy identity entries** even after
    point 1 was fixed.
 
-The fix is a single helper in `app/tab_cmyk_editor.py` —
-`_persistable_overrides(picks, cmyk_global)` — applied at every write
-site. It drops two cases:
+The fix is a single helper in `app/common.py` —
+`persistable_overrides(picks, global_map)` — imported by both editor
+tabs and called at every write site. It drops two cases:
 
 * `target == source` (identity, no-op).
 * `target == cmyk_correction_map[source].target` (already redundant
