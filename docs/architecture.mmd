@@ -1,0 +1,143 @@
+%% docs/architecture.mmd — illustration-color-edit's own internal structure.
+%% Hand-authored, not generated (fleet-config#256 / issue #38) — this repo has
+%% no structured source to crawl for its own internal shape, so it's authored
+%% once and kept correct by discipline. Update this diagram in the same PR as
+%% any material structural change (a tab added/moved, a pipeline stage added,
+%% a new persisted store). See global-CLAUDE.md's "Every repo carries a
+%% `.fleet.toml`" section for the general convention this companions.
+
+flowchart TB
+  AFFINITY["Affinity Designer 2\n(external, no scripting API)"]
+  INPUT["input/\nsource SVGs (gitignored)"]
+  AFFINITY -->|File > Export > SVG| INPUT
+
+  subgraph ui["app/ — Streamlit UI (app.py: page config + sidebar nav + routing)"]
+    APPPY["app.py + common.py\nbootstrap config/state, grouped sidebar nav"]
+    subgraph navlib["Library"]
+      TABLIB["tab_library.py"]
+    end
+    subgraph navproj["Project"]
+      TABSEM["tab_semantic_palette.py"]
+      TABACC["tab_accessibility.py"]
+    end
+    subgraph navgray["Grayscale"]
+      TABED["tab_editor.py"]
+      TABGMAP["tab_global_map.py"]
+      TABBATCH["tab_batch.py"]
+      TABSET["tab_settings.py"]
+    end
+    subgraph navcmyk["CMYK"]
+      TABCED["tab_cmyk_editor.py"]
+      TABCGMAP["tab_cmyk_global_map.py"]
+      TABPAL["tab_palette.py"]
+      TABCEXP["tab_cmyk_export.py"]
+      TABCSET["tab_cmyk_settings.py"]
+    end
+  end
+  APPPY --> navlib
+  APPPY --> navproj
+  APPPY --> navgray
+  APPPY --> navcmyk
+
+  subgraph core["src/ — shared pipeline core (used by app/ tabs AND cli.py)"]
+    CFG["config.py\nconfig.json / color-config.json loader"]
+    LIBMGR["library_manager.py\nscan input/, per-file status"]
+    SVGPARSE["svg_parser.py\nextract colors from SVG"]
+    CMAP["color_mapper.py\nexact + nearest-color match"]
+    SVGWRITE["svg_writer.py\napply mapping, write output SVG"]
+    MAPSTORE["mapping_store.py\nglobal map + per-file mapping (both pipelines)"]
+    SEMPAL["semantic_palette.py\nnamed slots + themes over hex maps"]
+    PALETTE["palette.py / palette_store.py\ncurated palette, Lab k-means seeding"]
+    PRINTSAFE["print_safety.py\ngray-value warnings (uncoated paper)"]
+    COLORBLIND["colorblind.py\nMachado-2009 simulation + risk"]
+  end
+
+  INPUT --> LIBMGR --> TABLIB
+  CFG --> APPPY
+  TABED --> SVGPARSE --> CMAP --> SVGWRITE --> MAPSTORE
+  MAPSTORE --> TABGMAP
+  TABSEM --> SEMPAL
+  TABPAL --> PALETTE
+  TABACC --> COLORBLIND
+  TABSET --> PRINTSAFE
+
+  subgraph cmykpipe["CMYK print pipeline (src/) — orchestrated by cmyk_pipeline.py"]
+    CMYKORCH["cmyk_pipeline.py\nsingle + batch + soft-proof orchestrator"]
+    SVG2PDF["svg_to_pdf.py\nInkscape: SVG -> RGB PDF at trim size"]
+    CMYKCONV["cmyk_convert.py\nGhostscript + ICC: RGB PDF -> CMYK PDF"]
+    DEVCMYK["device_cmyk.py\nexact DeviceCMYK operator patching"]
+    GAMUT["cmyk_gamut.py\nICC roundtrip / gamut warning"]
+    TAC["cmyk_tac.py\nTotal Area Coverage (max/mean/p99)"]
+    FORCEK["force_k.py\nfine-line + small-text K-plate detector"]
+    BLEED["bleed_overlay.py\ntrim/bleed/safety guide overlay"]
+    QAREPORT["qa_report.py\nHTML QA report (TAC + force-K columns)"]
+  end
+
+  TABCED --> CMYKORCH
+  TABCGMAP --> CMYKORCH
+  TABCEXP --> CMYKORCH
+  TABCSET --> TAC
+  TABCSET --> FORCEK
+  CMYKORCH --> SVGWRITE
+  CMYKORCH --> DEVCMYK
+  CMYKORCH --> GAMUT
+  CMYKORCH --> SVG2PDF --> CMYKCONV
+  CMYKCONV --> TAC
+  CMYKCONV --> FORCEK
+  CMYKCONV --> BLEED
+  CMYKORCH --> QAREPORT
+
+  subgraph ext["External tools + assets (not code in this repo)"]
+    INKSCAPE["Inkscape CLI"]
+    GS["Ghostscript CLI"]
+    ICC["ICC profiles\nprofiles/ (gitignored)"]
+  end
+  SVG2PDF --> INKSCAPE
+  CMYKCONV --> GS
+  CMYKCONV --> ICC
+
+  subgraph stores["Persisted project state (gitignored; .example templates committed)"]
+    CFGJSON["config.json"]
+    COLORCFGJSON["color-config.json"]
+    PALJSON["palette.json"]
+    SEMJSON["semantic-palette.json"]
+    METADATA["metadata/*.mapping.json"]
+  end
+  CFG --> CFGJSON
+  CFG --> COLORCFGJSON
+  MAPSTORE --> METADATA
+  MAPSTORE --> COLORCFGJSON
+  PALETTE --> PALJSON
+  SEMPAL --> SEMJSON
+
+  subgraph outputs["Output dirs (gitignored)"]
+    OUTGRAY["output/\n<name>_grayscale.svg / .png"]
+    OUTCMYK["output_cmyk/print + preview/\nCMYK PDFs, cut preview, QA report"]
+    DELIV["deliveries/<date>-<slug>/\nsnapshot + manifest + checksums"]
+  end
+  SVGWRITE --> OUTGRAY
+  CMYKCONV --> OUTCMYK
+  BLEED --> OUTCMYK
+  QAREPORT --> OUTCMYK
+  OUTGRAY -.->|re-import for touch-up| AFFINITY
+
+  DELIVERY["delivery.py\nsnapshot config + PDFs into deliveries/"]
+  DELIVERY --> DELIV
+  DELIVERY --> CFGJSON
+  DELIVERY --> COLORCFGJSON
+  DELIVERY --> SEMJSON
+
+  subgraph clientry["src/cli.py — batch entry point (both pipelines)"]
+    CLI["cli.py\nstatus / inspect / convert / cmyk-convert / deliver"]
+  end
+  CLI --> LIBMGR
+  CLI --> MAPSTORE
+  CLI --> SVGWRITE
+  CLI --> CMYKORCH
+  CLI --> DELIVERY
+
+  subgraph testsdir["tests/ — pytest unit tests"]
+    TESTS["one test_*.py per src/ module"]
+  end
+  TESTS --> core
+  TESTS --> cmykpipe
