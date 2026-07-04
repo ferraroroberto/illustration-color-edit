@@ -18,6 +18,10 @@ Canonical instructions for AI coding agents working in this repository. Claude C
 Standalone Streamlit app for SVG color-to-grayscale conversion, built for book illustrations where color carries semantic meaning. Uses a two-file config: `config.json` for folder paths, `color-config.json` for color mappings and matching parameters. Source SVGs come from Affinity Designer 2 exports; output SVGs are re-imported into Affinity for the grayscale print edition.
 See `README.md` for setup, layout, and usage.
 
+## Internal architecture
+
+[`docs/architecture.mmd`](docs/architecture.mmd) is a hand-authored Mermaid diagram of this repo's own internal structure (the Streamlit tab groups, the shared `src/` pipeline core, the CMYK print pipeline stages, `cli.py`, and the persisted/output stores) — the per-repo companion to the fleet-wide convention in `ferraroroberto/fleet-config#256`. Update it in the same PR as any material structural change (a tab added/moved, a pipeline stage added, a new persisted store). It is not auto-generated and is not covered by `pytest`.
+
 **Project specifics:**
 
 - **Streamlit:** this project is Streamlit.
