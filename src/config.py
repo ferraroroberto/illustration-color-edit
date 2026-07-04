@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Optional
 
@@ -51,6 +51,18 @@ class PathsConfig:
     input_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "input")
     output_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "output")
     metadata_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "metadata")
+
+
+# Fields that flatten a nested JSON group (``trim_to_content``, ``subdirs``)
+# onto ``CmykExportConfig`` for convenient attribute access. ``to_json()``
+# uses this to reassemble the groups on save the same way ``load_config``
+# tears them apart on load.
+_CMYK_NESTED_FIELDS: dict[str, tuple[str, str]] = {
+    "trim_to_content_enabled": ("trim_to_content", "enabled"),
+    "trim_to_content_padding_pt": ("trim_to_content", "padding_pt"),
+    "print_subdir": ("subdirs", "print"),
+    "preview_subdir": ("subdirs", "preview"),
+}
 
 
 @dataclass
@@ -161,6 +173,31 @@ class CmykExportConfig:
         """Resolved directory for the full client-facing preview PNGs."""
         return self.output_dir / self.preview_subdir if self.preview_subdir else self.output_dir
 
+    def to_json(self) -> dict[str, Any]:
+        """Serialise back to the ``cmyk_export`` JSON shape ``load_config`` reads.
+
+        Walks ``dataclasses.fields()`` so every field on this dataclass is
+        included automatically — a new field only needs to be added here
+        (implicitly, by existing) rather than also being remembered in a
+        hand-rolled save-side dict. ``Path`` fields are normalised to
+        strings; the fields that live in nested JSON groups
+        (``trim_to_content``, ``subdirs``) are reassembled via
+        ``_CMYK_NESTED_FIELDS``, the inverse of how ``load_config`` flattens
+        them.
+        """
+        out: dict[str, Any] = {}
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if isinstance(value, Path):
+                value = str(value)
+            nested = _CMYK_NESTED_FIELDS.get(f.name)
+            if nested:
+                group, key = nested
+                out.setdefault(group, {})[key] = value
+            else:
+                out[f.name] = value
+        return out
+
 
 @dataclass
 class AppConfig:
@@ -202,6 +239,48 @@ def _load_raw(candidates: list[Path], label: str) -> tuple[Optional[Path], dict[
             return c, json.loads(c.read_text(encoding="utf-8"))
     log.warning("No %s found; using built-in defaults.", label)
     return None, {}
+
+
+def _build_cmyk_export_config(cmyk: dict[str, Any], base: Path) -> CmykExportConfig:
+    """Construct a ``CmykExportConfig`` from the raw ``cmyk_export`` JSON dict.
+
+    Extracted from ``load_config`` so the load-side field-by-field mapping is
+    reusable (e.g. by tests exercising the ``to_json`` round trip) without
+    going through file I/O.
+    """
+    return CmykExportConfig(
+        enabled=bool(cmyk.get("enabled", True)),
+        output_dir=_resolve_path(cmyk.get("output_dir", "./output_cmyk"), base),
+        icc_profile_path=_resolve_path(
+            cmyk.get("icc_profile_path", "./profiles/ISOcoated_v2_eci.icc"), base
+        ),
+        ghostscript_path=str(cmyk.get("ghostscript_path", "gswin64c")),
+        target_width_inches=float(cmyk.get("target_width_inches", 5.5)),
+        target_height_inches=float(cmyk.get("target_height_inches", 7.5)),
+        bleed_inches=float(cmyk.get("bleed_inches", 0.0)),
+        pdfx_compliance=_coerce_pdfx_compliance(cmyk.get("pdfx_compliance", False)),
+        generate_preview_png=bool(cmyk.get("generate_preview_png", True)),
+        preview_dpi=int(cmyk.get("preview_dpi", 150)),
+        audit_artifacts=bool(cmyk.get("audit_artifacts", True)),
+        filename_template=str(cmyk.get("filename_template", "")),
+        tac_limit_percent=float(cmyk.get("tac_limit_percent", 320.0)),
+        tac_check_dpi=int(cmyk.get("tac_check_dpi", 100)),
+        force_k_min_stroke_pt=float(cmyk.get("force_k_min_stroke_pt", 0.5)),
+        force_k_min_text_pt=float(cmyk.get("force_k_min_text_pt", 9.0)),
+        safety_inches=float(cmyk.get("safety_inches", 0.1875)),
+        show_guide_overlay=bool(cmyk.get("show_guide_overlay", True)),
+        trim_to_content_enabled=bool(
+            cmyk.get("trim_to_content", {}).get("enabled", False)
+        ),
+        trim_to_content_padding_pt=float(
+            cmyk.get("trim_to_content", {}).get("padding_pt", 0.0)
+        ),
+        print_subdir=str(cmyk.get("subdirs", {}).get("print", "print")),
+        preview_subdir=str(cmyk.get("subdirs", {}).get("preview", "preview")),
+        generate_full_preview=bool(cmyk.get("generate_full_preview", True)),
+        render_check=bool(cmyk.get("render_check", True)),
+        render_check_dpi=int(cmyk.get("render_check_dpi", 300)),
+    )
 
 
 def load_config() -> AppConfig:
@@ -266,39 +345,7 @@ def load_config() -> AppConfig:
     )
 
     cmyk = path_raw.get("cmyk_export", {})
-    cfg.cmyk_export = CmykExportConfig(
-        enabled=bool(cmyk.get("enabled", True)),
-        output_dir=_resolve_path(cmyk.get("output_dir", "./output_cmyk"), base),
-        icc_profile_path=_resolve_path(
-            cmyk.get("icc_profile_path", "./profiles/ISOcoated_v2_eci.icc"), base
-        ),
-        ghostscript_path=str(cmyk.get("ghostscript_path", "gswin64c")),
-        target_width_inches=float(cmyk.get("target_width_inches", 5.5)),
-        target_height_inches=float(cmyk.get("target_height_inches", 7.5)),
-        bleed_inches=float(cmyk.get("bleed_inches", 0.0)),
-        pdfx_compliance=_coerce_pdfx_compliance(cmyk.get("pdfx_compliance", False)),
-        generate_preview_png=bool(cmyk.get("generate_preview_png", True)),
-        preview_dpi=int(cmyk.get("preview_dpi", 150)),
-        audit_artifacts=bool(cmyk.get("audit_artifacts", True)),
-        filename_template=str(cmyk.get("filename_template", "")),
-        tac_limit_percent=float(cmyk.get("tac_limit_percent", 320.0)),
-        tac_check_dpi=int(cmyk.get("tac_check_dpi", 100)),
-        force_k_min_stroke_pt=float(cmyk.get("force_k_min_stroke_pt", 0.5)),
-        force_k_min_text_pt=float(cmyk.get("force_k_min_text_pt", 9.0)),
-        safety_inches=float(cmyk.get("safety_inches", 0.1875)),
-        show_guide_overlay=bool(cmyk.get("show_guide_overlay", True)),
-        trim_to_content_enabled=bool(
-            cmyk.get("trim_to_content", {}).get("enabled", False)
-        ),
-        trim_to_content_padding_pt=float(
-            cmyk.get("trim_to_content", {}).get("padding_pt", 0.0)
-        ),
-        print_subdir=str(cmyk.get("subdirs", {}).get("print", "print")),
-        preview_subdir=str(cmyk.get("subdirs", {}).get("preview", "preview")),
-        generate_full_preview=bool(cmyk.get("generate_full_preview", True)),
-        render_check=bool(cmyk.get("render_check", True)),
-        render_check_dpi=int(cmyk.get("render_check_dpi", 300)),
-    )
+    cfg.cmyk_export = _build_cmyk_export_config(cmyk, base)
 
     cfg.log_level = str(color_raw.get("logging", {}).get("level", "INFO")).upper()
     return cfg
