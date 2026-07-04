@@ -32,6 +32,7 @@ from common import (
     color_swatch,
     load_semantic_palette,
     numeric_metric_cell,
+    strip_xml_declaration,
 )
 from src.cmyk_gamut import cmyk_gamut_delta, cmyk_roundtrip_rgb
 from src.config import PROJECT_ROOT
@@ -288,16 +289,6 @@ def _visual_diffs_for_swatch(
     return diffs
 
 
-def _strip_xml_decl(svg_bytes: bytes) -> str:
-    """Decode SVG bytes and drop the leading ``<?xml ... ?>`` so the markup
-    can be embedded directly inside HTML.
-    """
-    text = svg_bytes.decode("utf-8", errors="replace")
-    if text.lstrip().startswith("<?xml"):
-        text = text.split("?>", 1)[1].lstrip()
-    return text
-
-
 _THUMB_WRAPPER = (
     'background:#fff;border:1px solid #eee;border-radius:4px;'
     'width:100%;aspect-ratio:1/1;display:flex;align-items:center;'
@@ -363,10 +354,10 @@ def _render_replace_visual_preview(
 
     cards: list[str] = []
     for filename, before_bytes, after_bytes, after_cmyk_bytes in visible:
-        before_svg = _strip_xml_decl(before_bytes)
-        after_svg = _strip_xml_decl(after_bytes)
+        before_svg = strip_xml_declaration(before_bytes)
+        after_svg = strip_xml_declaration(after_bytes)
         if after_cmyk_bytes is not None:
-            cmyk_svg = _strip_xml_decl(after_cmyk_bytes)
+            cmyk_svg = strip_xml_declaration(after_cmyk_bytes)
             body = (
                 '<div style="display:grid;'
                 'grid-template-columns:1fr auto 1fr auto 1fr;'

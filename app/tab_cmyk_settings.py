@@ -25,6 +25,7 @@ from src.cmyk_convert import PDFX_1A, PDFX_4, normalize_pdfx_mode, pdfx_mode_lab
 from src.filename_template import TemplateError, apply_template
 from src.library_manager import LibraryManager
 from src.mapping_store import _atomic_write_json
+from src.utils import format_bytes
 
 
 def _persist_settings(cfg) -> Path | None:
@@ -109,14 +110,6 @@ def _render_filename_preview(template: str, library: LibraryManager) -> None:
         )
 
 
-def _format_bytes(n: int) -> str:
-    if n >= 1_048_576:
-        return f"{n/1_048_576:.2f} MB"
-    if n >= 1024:
-        return f"{n/1024:.1f} KB"
-    return f"{n} B"
-
-
 def render() -> None:
     cfg = st.session_state.config
     ce: CmykExportConfig = cfg.cmyk_export
@@ -127,7 +120,7 @@ def render() -> None:
 
     icc = ce.icc_profile_path
     icc_exists = icc.is_file()
-    icc_size = _format_bytes(icc.stat().st_size) if icc_exists else "—"
+    icc_size = format_bytes(icc.stat().st_size) if icc_exists else "—"
     pdfx_label = pdfx_mode_label(ce.pdfx_compliance)
 
     c1, c2 = st.columns(2)
