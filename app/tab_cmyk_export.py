@@ -8,12 +8,15 @@ tab only reads them.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import streamlit as st
 
 from common import load_semantic_palette, open_in_explorer
-from src.cmyk_pipeline import CmykContext, process_batch
+from src.cmyk_pipeline import (
+    FileResult,
+    build_batch_plan_factory,
+    build_cmyk_context,
+    process_batch,
+)
 from src.cmyk_convert import pdfx_mode_label
 from src.config import PROJECT_ROOT, CmykExportConfig
 from tab_cmyk_settings import persist_settings as _persist_cmyk_settings
@@ -21,7 +24,6 @@ from src.delivery import create_snapshot
 from src.library_manager import LibraryManager
 from src.mapping_store import MappingStore
 from src.qa_report import write_report
-from src.semantic_palette import merge_with_semantic
 
 
 def render() -> None:
@@ -137,33 +139,7 @@ def render() -> None:
             st.warning("Nothing to export.")
             return
 
-        ctx = CmykContext(
-            output_dir=ce.output_dir,
-            icc_profile=ce.icc_profile_path,
-            inkscape_exe=cfg.png_export.inkscape_path,
-            ghostscript_exe=ce.ghostscript_path,
-            width_inches=ce.target_width_inches,
-            height_inches=ce.target_height_inches,
-            bleed_inches=ce.bleed_inches,
-            pdfx=ce.pdfx_compliance,
-            generate_preview=ce.generate_preview_png,
-            preview_dpi=ce.preview_dpi,
-            audit_artifacts=ce.audit_artifacts,
-            filename_template=ce.filename_template,
-            tac_limit_percent=ce.tac_limit_percent,
-            tac_check_dpi=ce.tac_check_dpi,
-            force_k_min_stroke_pt=ce.force_k_min_stroke_pt,
-            force_k_min_text_pt=ce.force_k_min_text_pt,
-            safety_inches=ce.safety_inches,
-            show_guide_overlay=ce.show_guide_overlay,
-            trim_to_content_enabled=ce.trim_to_content_enabled,
-            trim_to_content_padding_pt=ce.trim_to_content_padding_pt,
-            print_dir=ce.print_dir,
-            preview_dir=ce.preview_dir,
-            generate_full_preview=ce.generate_full_preview,
-            render_check_enabled=ce.render_check,
-            render_check_dpi=ce.render_check_dpi,
-        )
+        ctx = build_cmyk_context(cfg)
 
         # Build per-file mapping list. Each illustration gets its own merge
         # of (global cmyk_correction_map + per-file cmyk_overrides).
@@ -172,26 +148,8 @@ def render() -> None:
         progress = st.progress(0.0)
         status_box = st.empty()
 
-        from dataclasses import replace as _replace
-        from src.cmyk_pipeline import BatchFilePlan, FileResult
         sem = load_semantic_palette()
-
-        def _plan(path: Path) -> BatchFilePlan:
-            illu = store.load_illustration(path.name)
-            full_mapping = merge_with_semantic(
-                cmyk_global, illu.cmyk_overrides, sem, "cmyk",
-            )
-            device_mapping = {
-                **cmyk_device_global,
-                **illu.cmyk_device_overrides,
-            }
-            per_ctx = _replace(ctx, apply_auto_fix=illu.cmyk_auto_fix)
-
-            def _mark_exported(_r: FileResult) -> None:
-                illu.with_cmyk_status("exported")
-                store.save_illustration(illu)
-
-            return BatchFilePlan(full_mapping, per_ctx, device_mapping, _mark_exported)
+        plan_file = build_batch_plan_factory(store, cmyk_global, cmyk_device_global, ctx, sem)
 
         def _on_progress(i: int, total: int, r: FileResult) -> None:
             status_box.markdown(
@@ -205,7 +163,7 @@ def render() -> None:
             {},  # per-file correction maps come from plan_file
             ctx,
             on_progress=_on_progress,
-            plan_file=_plan,
+            plan_file=plan_file,
             # palette_mapped reflects the global correction map — per-file
             # overrides get reported per-file via FileResult.replacements.
             palette_mapped={k: v["target"] for k, v in cmyk_global.items()},

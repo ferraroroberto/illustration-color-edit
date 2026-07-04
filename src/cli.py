@@ -29,7 +29,12 @@ from pathlib import Path
 from typing import Optional
 
 from .cmyk_convert import build_gs_command, pdfx_mode_label
-from .cmyk_pipeline import BatchFilePlan, CmykContext, FileResult, process_batch
+from .cmyk_pipeline import (
+    FileResult,
+    build_batch_plan_factory,
+    build_cmyk_context,
+    process_batch,
+)
 from .color_mapper import ColorMapper, MatchKind
 from .config import PROJECT_ROOT, AppConfig, configure_logging, load_config
 from .device_cmyk import merge_device_cmyk_overrides
@@ -410,32 +415,11 @@ def cmd_cmyk_convert(args: argparse.Namespace, cfg: AppConfig) -> int:
         args.trim_padding_pt if args.trim_padding_pt is not None
         else cfg.cmyk_export.trim_to_content_padding_pt
     )
-    ctx = CmykContext(
-        output_dir=cfg.cmyk_export.output_dir,
-        icc_profile=cfg.cmyk_export.icc_profile_path,
-        inkscape_exe=cfg.png_export.inkscape_path,
-        ghostscript_exe=cfg.cmyk_export.ghostscript_path,
-        width_inches=cfg.cmyk_export.target_width_inches,
-        height_inches=cfg.cmyk_export.target_height_inches,
-        bleed_inches=cfg.cmyk_export.bleed_inches,
-        pdfx=cfg.cmyk_export.pdfx_compliance,
-        generate_preview=cfg.cmyk_export.generate_preview_png,
-        preview_dpi=cfg.cmyk_export.preview_dpi,
-        audit_artifacts=cfg.cmyk_export.audit_artifacts,
+    ctx = build_cmyk_context(
+        cfg,
         filename_template=template,
-        tac_limit_percent=cfg.cmyk_export.tac_limit_percent,
-        tac_check_dpi=cfg.cmyk_export.tac_check_dpi,
-        force_k_min_stroke_pt=cfg.cmyk_export.force_k_min_stroke_pt,
-        force_k_min_text_pt=cfg.cmyk_export.force_k_min_text_pt,
-        safety_inches=cfg.cmyk_export.safety_inches,
-        show_guide_overlay=cfg.cmyk_export.show_guide_overlay,
         trim_to_content_enabled=trim_enabled,
         trim_to_content_padding_pt=trim_padding,
-        print_dir=cfg.cmyk_export.print_dir,
-        preview_dir=cfg.cmyk_export.preview_dir,
-        generate_full_preview=cfg.cmyk_export.generate_full_preview,
-        render_check_enabled=cfg.cmyk_export.render_check,
-        render_check_dpi=cfg.cmyk_export.render_check_dpi,
     )
 
     if args.dry_run:
@@ -454,25 +438,8 @@ def cmd_cmyk_convert(args: argparse.Namespace, cfg: AppConfig) -> int:
         print("  " + " ".join(repr(a) if " " in a else a for a in cmd))
         return 0
 
-    from dataclasses import replace as _replace
     sem = _load_semantic_palette()
-
-    def _plan(path: Path) -> BatchFilePlan:
-        illu = store.load_illustration(path.name)
-        merged = merge_with_semantic(
-            cmyk_global, illu.cmyk_overrides, sem, "cmyk",
-        )
-        device_mapping = {
-            **cmyk_device_global,
-            **illu.cmyk_device_overrides,
-        }
-        per_ctx = _replace(ctx, apply_auto_fix=illu.cmyk_auto_fix)
-
-        def _mark_exported(_r: FileResult) -> None:
-            illu.with_cmyk_status("exported")
-            store.save_illustration(illu)
-
-        return BatchFilePlan(merged, per_ctx, device_mapping, _mark_exported)
+    plan_file = build_batch_plan_factory(store, cmyk_global, cmyk_device_global, ctx, sem)
 
     def _on_progress(i: int, total: int, r: FileResult) -> None:
         if r.status == "ok":
@@ -488,7 +455,7 @@ def cmd_cmyk_convert(args: argparse.Namespace, cfg: AppConfig) -> int:
         {},  # per-file correction maps come from plan_file
         ctx,
         on_progress=_on_progress,
-        plan_file=_plan,
+        plan_file=plan_file,
         palette_mapped={k: v["target"] for k, v in cmyk_global.items()},
     )
     qa_path = write_report(report, cfg.cmyk_export.print_dir)

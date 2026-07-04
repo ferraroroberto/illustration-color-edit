@@ -113,6 +113,16 @@ def cached_color_extract(path_str: str, mtime: float) -> dict[str, int]:
 # --------------------------------------------------------------------------- #
 # Inline rendering
 # --------------------------------------------------------------------------- #
+def strip_xml_declaration(svg_bytes: bytes) -> str:
+    """Decode SVG bytes and drop the leading ``<?xml ... ?>`` so the markup
+    can be embedded directly inside HTML.
+    """
+    text = svg_bytes.decode("utf-8", errors="replace")
+    if text.lstrip().startswith("<?xml"):
+        text = text.split("?>", 1)[1].lstrip()
+    return text
+
+
 def render_inline_svg(
     svg_bytes: bytes,
     *,
@@ -126,9 +136,7 @@ def render_inline_svg(
     useful when stacking previews in equal-width columns and you want
     them to share visible size with adjacent ``st.image`` panels.
     """
-    text = svg_bytes.decode("utf-8", errors="replace")
-    if text.lstrip().startswith("<?xml"):
-        text = text.split("?>", 1)[1].lstrip()
+    text = strip_xml_declaration(svg_bytes)
     if aspect:
         size_style = f"width:100%;aspect-ratio:{aspect};"
     else:

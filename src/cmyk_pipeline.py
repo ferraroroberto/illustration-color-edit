@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -43,6 +43,7 @@ from .cmyk_convert import (
 )
 from .bleed_overlay import composite_guides
 from .cmyk_tac import TacComputeError, TacReport, compute_tac
+from .config import AppConfig
 from .device_cmyk import (
     DeviceCmykError,
     DeviceCmyk,
@@ -53,11 +54,14 @@ from .device_cmyk import (
 )
 from .filename_template import TemplateError, apply_template
 from .force_k import FineLineReport, find_fine_lines
+from .mapping_store import MappingStore
 from .render_check import RenderCheckError, check_render_fidelity
+from .semantic_palette import SemanticPalette, merge_with_semantic
 from .svg_parser import _localname, parse_svg
 from .svg_to_pdf import InkscapeNotFoundError, SvgToPdfError, svg_to_pdf
 from .svg_writer import apply_mapping_with_report
 from .trim_to_content import TrimError, TrimReport, trim_svg_to_content
+from .utils import format_bytes
 
 log = logging.getLogger(__name__)
 
@@ -410,18 +414,10 @@ def _purge_prior_previews(print_dir: Path, preview_dir: Path, out_stem: str) -> 
         path.unlink(missing_ok=True)
 
 
-def _format_bytes(n: int) -> str:
-    if n >= 1_048_576:
-        return f"{n/1_048_576:.2f} MB"
-    if n >= 1024:
-        return f"{n/1024:.1f} KB"
-    return f"{n} B"
-
-
 def _safe_size(path: Optional[Path]) -> str:
     if path is None or not path.is_file():
         return "—"
-    return _format_bytes(path.stat().st_size)
+    return format_bytes(path.stat().st_size)
 
 
 def write_conversion_report(
@@ -1116,3 +1112,97 @@ def process_batch(
     report.finished_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     report.total_seconds = round(time.time() - started, 3)
     return report
+
+
+# --------------------------------------------------------------------------- #
+# Shared batch-build helpers (CLI ``cmd_cmyk_convert`` + CMYK Print Export tab)
+# --------------------------------------------------------------------------- #
+def build_cmyk_context(
+    cfg: AppConfig,
+    *,
+    filename_template: Optional[str] = None,
+    trim_to_content_enabled: Optional[bool] = None,
+    trim_to_content_padding_pt: Optional[float] = None,
+) -> CmykContext:
+    """Build a :class:`CmykContext` from ``cfg.cmyk_export`` + ``cfg.png_export``.
+
+    The three keyword overrides let a caller supersede the configured value
+    for one run — e.g. the CLI's ``--filename-template`` / ``--trim`` /
+    ``--no-trim`` / ``--trim-padding-pt`` flags — without mutating ``cfg``.
+    ``None`` (the default) means "use the configured value verbatim", which is
+    what the CMYK Print Export tab wants since it has no such per-run
+    overrides.
+    """
+    ce = cfg.cmyk_export
+    return CmykContext(
+        output_dir=ce.output_dir,
+        icc_profile=ce.icc_profile_path,
+        inkscape_exe=cfg.png_export.inkscape_path,
+        ghostscript_exe=ce.ghostscript_path,
+        width_inches=ce.target_width_inches,
+        height_inches=ce.target_height_inches,
+        bleed_inches=ce.bleed_inches,
+        pdfx=ce.pdfx_compliance,
+        generate_preview=ce.generate_preview_png,
+        preview_dpi=ce.preview_dpi,
+        audit_artifacts=ce.audit_artifacts,
+        filename_template=(
+            ce.filename_template if filename_template is None else filename_template
+        ),
+        tac_limit_percent=ce.tac_limit_percent,
+        tac_check_dpi=ce.tac_check_dpi,
+        force_k_min_stroke_pt=ce.force_k_min_stroke_pt,
+        force_k_min_text_pt=ce.force_k_min_text_pt,
+        safety_inches=ce.safety_inches,
+        show_guide_overlay=ce.show_guide_overlay,
+        trim_to_content_enabled=(
+            ce.trim_to_content_enabled if trim_to_content_enabled is None
+            else trim_to_content_enabled
+        ),
+        trim_to_content_padding_pt=(
+            ce.trim_to_content_padding_pt if trim_to_content_padding_pt is None
+            else trim_to_content_padding_pt
+        ),
+        print_dir=ce.print_dir,
+        preview_dir=ce.preview_dir,
+        generate_full_preview=ce.generate_full_preview,
+        render_check_enabled=ce.render_check,
+        render_check_dpi=ce.render_check_dpi,
+    )
+
+
+def build_batch_plan_factory(
+    store: MappingStore,
+    cmyk_global: dict[str, dict[str, str]],
+    cmyk_device_global: dict[str, DeviceCmyk],
+    ctx: CmykContext,
+    sem: Optional[SemanticPalette],
+) -> Callable[[Path], BatchFilePlan]:
+    """Return a ``plan_file`` callback for :func:`process_batch`.
+
+    Shared by the CLI's ``cmd_cmyk_convert`` and the CMYK Print Export tab's
+    ``render``: for each SVG, merges the global correction map + active
+    semantic theme + per-illustration override (:func:`merge_with_semantic`),
+    unions the device-CMYK overrides the same way, threads the per-file
+    ``apply_auto_fix`` flag through ``dataclasses.replace``, and marks the
+    illustration "exported" on a successful conversion.
+    """
+
+    def _plan(path: Path) -> BatchFilePlan:
+        illu = store.load_illustration(path.name)
+        merged = merge_with_semantic(
+            cmyk_global, illu.cmyk_overrides, sem, "cmyk",
+        )
+        device_mapping = {
+            **cmyk_device_global,
+            **illu.cmyk_device_overrides,
+        }
+        per_ctx = replace(ctx, apply_auto_fix=illu.cmyk_auto_fix)
+
+        def _mark_exported(_r: FileResult) -> None:
+            illu.with_cmyk_status("exported")
+            store.save_illustration(illu)
+
+        return BatchFilePlan(merged, per_ctx, device_mapping, _mark_exported)
+
+    return _plan
