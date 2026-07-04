@@ -37,37 +37,7 @@ def _persist_settings(cfg) -> Path | None:
     if not cfg_path.is_file():
         return None
     raw = json.loads(cfg_path.read_text(encoding="utf-8"))
-    raw["cmyk_export"] = {
-        "enabled": cfg.cmyk_export.enabled,
-        "output_dir": str(cfg.cmyk_export.output_dir),
-        "icc_profile_path": str(cfg.cmyk_export.icc_profile_path),
-        "ghostscript_path": cfg.cmyk_export.ghostscript_path,
-        "target_width_inches": cfg.cmyk_export.target_width_inches,
-        "target_height_inches": cfg.cmyk_export.target_height_inches,
-        "bleed_inches": cfg.cmyk_export.bleed_inches,
-        "pdfx_compliance": cfg.cmyk_export.pdfx_compliance,
-        "generate_preview_png": cfg.cmyk_export.generate_preview_png,
-        "preview_dpi": cfg.cmyk_export.preview_dpi,
-        "audit_artifacts": cfg.cmyk_export.audit_artifacts,
-        "filename_template": cfg.cmyk_export.filename_template,
-        "tac_limit_percent": cfg.cmyk_export.tac_limit_percent,
-        "tac_check_dpi": cfg.cmyk_export.tac_check_dpi,
-        "force_k_min_stroke_pt": cfg.cmyk_export.force_k_min_stroke_pt,
-        "force_k_min_text_pt": cfg.cmyk_export.force_k_min_text_pt,
-        "safety_inches": cfg.cmyk_export.safety_inches,
-        "show_guide_overlay": cfg.cmyk_export.show_guide_overlay,
-        "trim_to_content": {
-            "enabled": cfg.cmyk_export.trim_to_content_enabled,
-            "padding_pt": cfg.cmyk_export.trim_to_content_padding_pt,
-        },
-        "subdirs": {
-            "print": cfg.cmyk_export.print_subdir,
-            "preview": cfg.cmyk_export.preview_subdir,
-        },
-        "generate_full_preview": cfg.cmyk_export.generate_full_preview,
-        "render_check": cfg.cmyk_export.render_check,
-        "render_check_dpi": cfg.cmyk_export.render_check_dpi,
-    }
+    raw["cmyk_export"] = cfg.cmyk_export.to_json()
     _atomic_write_json(cfg_path, raw)
     return cfg_path
 
