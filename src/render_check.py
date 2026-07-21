@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -140,7 +141,10 @@ def _render_svg_png(svg_path: Path, png_path: Path, dpi: int, inkscape_exe: str)
         "--export-background=#ffffff",
         "--export-background-opacity=1",
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(
+        cmd, capture_output=True, text=True,
+        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+    )
     if result.returncode != 0 or not png_path.is_file():
         raise RenderCheckError(
             f"Inkscape SVG→PNG failed (exit {result.returncode}) on {svg_path.name}: "
@@ -152,7 +156,10 @@ def _render_pdf_png(pdf_path: Path, png_path: Path, dpi: int, gs_exe: str) -> No
     """Render the first PDF page to PNG with Ghostscript (the export under test)."""
     bin_path = _resolve_ghostscript(gs_exe)
     cmd = _gs_png_render_argv(bin_path, pdf_path, png_path, dpi)
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(
+        cmd, capture_output=True, text=True,
+        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+    )
     if result.returncode != 0 or not png_path.is_file():
         raise RenderCheckError(
             f"Ghostscript PDF→PNG failed (exit {result.returncode}) on {pdf_path.name}: "

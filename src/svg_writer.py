@@ -223,6 +223,7 @@ def write_png_from_svg(
 ) -> None:
     """Rasterise an SVG file to a PNG at ``destination`` via Inkscape CLI."""
     import subprocess
+    import sys
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
@@ -232,7 +233,10 @@ def write_png_from_svg(
         f"--export-dpi={dpi}",
         f"--export-filename={destination}",
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(
+        cmd, capture_output=True, text=True,
+        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+    )
     if result.returncode != 0:
         raise RuntimeError(
             f"Inkscape failed (exit {result.returncode}): {result.stderr.strip()}"

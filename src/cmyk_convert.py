@@ -18,10 +18,16 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Optional
 
 log = logging.getLogger(__name__)
+
+# Suppress the console window Ghostscript would otherwise flash on Windows
+# when this module is invoked from a console-less parent (Streamlit via
+# pythonw, a tray app, a scheduled task). No-op on other platforms.
+_NO_WINDOW_FLAGS = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 
 class GhostscriptNotFoundError(RuntimeError):
@@ -105,6 +111,7 @@ def get_ghostscript_version(gs_exe: str) -> str:
     try:
         result = subprocess.run(
             [bin_path, "--version"], capture_output=True, text=True, timeout=10,
+            creationflags=_NO_WINDOW_FLAGS,
         )
     except (subprocess.SubprocessError, OSError):
         return "unknown"
@@ -377,7 +384,7 @@ def rgb_pdf_to_cmyk(
              input_pdf.name, output_pdf.name, pdfx_mode or False, icc_profile.name)
     log.debug("Ghostscript command: %s", cmd)
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, creationflags=_NO_WINDOW_FLAGS)
     if result.returncode != 0:
         raise CmykConvertError(
             f"Ghostscript failed (exit {result.returncode}) on {input_pdf.name}: "
@@ -430,7 +437,7 @@ def pdf_to_preview_png(
 
     log.info("Ghostscript soft-proof PNG: %s → %s @ %d dpi", pdf_path.name, png_path.name, dpi)
     log.debug("Ghostscript command: %s", cmd)
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, creationflags=_NO_WINDOW_FLAGS)
     if result.returncode != 0:
         raise CmykConvertError(
             f"Ghostscript preview failed (exit {result.returncode}): "
