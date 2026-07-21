@@ -31,6 +31,7 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -154,7 +155,10 @@ def _query_drawing_bbox(
             "--export-background-opacity=0",  # transparent bg
             str(svg_path),
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        )
         if result.returncode != 0 or not png.is_file():
             raise TrimError(
                 f"Inkscape render for trim failed on {svg_path.name}: "

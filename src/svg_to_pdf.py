@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -106,7 +107,10 @@ def svg_to_pdf(
              svg_path.name, pdf_path.name, width_inches, height_inches, bleed_inches)
     log.debug("Inkscape command: %s", cmd)
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(
+        cmd, capture_output=True, text=True,
+        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+    )
     if result.returncode != 0:
         raise SvgToPdfError(
             f"Inkscape failed (exit {result.returncode}) on {svg_path.name}: "

@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -98,7 +99,10 @@ def _render_cmyk_tiff(
         str(pdf_path),
     ]
     log.debug("Ghostscript TAC raster: %s", cmd)
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(
+        cmd, capture_output=True, text=True,
+        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+    )
     if result.returncode != 0 or not tiff_path.is_file():
         raise TacComputeError(
             f"Ghostscript tiff32nc failed (exit {result.returncode}) on "
