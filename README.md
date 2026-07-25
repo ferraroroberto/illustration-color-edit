@@ -138,6 +138,8 @@ illustration-color-edit/
 ├── deliveries/                 # gitignored, per-handoff snapshots (configs + PDFs + manifest)
 ├── .env.example
 ├── .gitignore
+├── .streamlit/
+│   └── config.toml             # committed Streamlit settings (pins server port 8503)
 ├── requirements.txt
 ├── launch_app.bat
 └── README.md
@@ -289,6 +291,14 @@ or
 ```powershell
 & .\.venv\Scripts\python.exe -m streamlit run app\app.py
 ```
+
+The app serves on **http://localhost:8503**. The port is pinned in the committed
+`.streamlit/config.toml` rather than left on Streamlit's default 8501, because
+sibling Streamlit apps default to 8501 too and the collision is silent — the
+launch either aborts with `Port 8501 is not available` or double-binds, leaving
+the browser on a blank page talking to the wrong server. Override for a one-off
+run with `.\launch_app.bat --server.port 8510`; to move it permanently, edit
+`.streamlit/config.toml` and keep `.fleet.toml`'s `port` field in sync.
 
 The app has twelve sidebar destinations organised as: **Library** ·
 **Project** (Semantic Palette + Accessibility, both cross-pipeline) ·

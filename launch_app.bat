@@ -12,6 +12,17 @@ if exist ".venv\Scripts\python.exe" (
     set "PYEXE=python"
 )
 
+REM Port comes from .streamlit\config.toml (8503) unless overridden via %*.
 "%PYEXE%" -m streamlit run app\app.py %*
+
+REM Keep the window open on failure so the reason stays readable. Streamlit
+REM writes "Port 8503 is not available" and exits immediately when the port is
+REM taken; without this the window closes before anyone can read it (issue #42).
+set "RC=%errorlevel%"
+if not "%RC%"=="0" (
+    echo.
+    echo [error] Streamlit exited with code %RC%. See the message above.
+    pause
+)
 
 endlocal

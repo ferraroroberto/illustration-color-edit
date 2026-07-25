@@ -1,0 +1,12 @@
+# Committed Streamlit settings for this app.
+#
+# server.port is pinned so the app does not land on Streamlit's default 8501,
+# which sibling fleet Streamlit apps also default to. An unpinned port either
+# aborts the launch with "Port 8501 is not available" or — when the incumbent
+# listens IPv6-only — silently double-binds, leaving the browser talking to the
+# wrong server on a blank page (issue #42).
+#
+# Keep this in sync with the `port` field in .fleet.toml and the README.
+
+[server]
+port = 8503
