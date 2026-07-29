@@ -42,3 +42,5 @@ tmp/
 profiles/*
 !profiles/.gitkeep
 !profiles/README.txt
+# Launcher scratch (ephemeral images/logs written by the tray launcher)
+.launcher-tmp/
