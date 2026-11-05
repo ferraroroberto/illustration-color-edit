@@ -22,6 +22,8 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+from .subprocess_limits import GHOSTSCRIPT_CONVERT_TIMEOUT_S, GHOSTSCRIPT_PAGE_TIMEOUT_S
+
 log = logging.getLogger(__name__)
 
 # Suppress the console window Ghostscript would otherwise flash on Windows
@@ -384,7 +386,15 @@ def rgb_pdf_to_cmyk(
              input_pdf.name, output_pdf.name, pdfx_mode or False, icc_profile.name)
     log.debug("Ghostscript command: %s", cmd)
 
-    result = subprocess.run(cmd, capture_output=True, text=True, creationflags=_NO_WINDOW_FLAGS)
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, creationflags=_NO_WINDOW_FLAGS,
+            timeout=GHOSTSCRIPT_CONVERT_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise CmykConvertError(
+            f"Ghostscript timed out after {GHOSTSCRIPT_CONVERT_TIMEOUT_S}s converting {input_pdf.name}"
+        ) from exc
     if result.returncode != 0:
         raise CmykConvertError(
             f"Ghostscript failed (exit {result.returncode}) on {input_pdf.name}: "
@@ -437,7 +447,15 @@ def pdf_to_preview_png(
 
     log.info("Ghostscript soft-proof PNG: %s → %s @ %d dpi", pdf_path.name, png_path.name, dpi)
     log.debug("Ghostscript command: %s", cmd)
-    result = subprocess.run(cmd, capture_output=True, text=True, creationflags=_NO_WINDOW_FLAGS)
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, creationflags=_NO_WINDOW_FLAGS,
+            timeout=GHOSTSCRIPT_PAGE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise CmykConvertError(
+            f"Ghostscript timed out after {GHOSTSCRIPT_PAGE_TIMEOUT_S}s rendering a preview of {pdf_path.name}"
+        ) from exc
     if result.returncode != 0:
         raise CmykConvertError(
             f"Ghostscript preview failed (exit {result.returncode}): "

@@ -1,0 +1,4 @@
+# BEGIN vendored-copies (generated from .fleet.toml [vendored]; edit the manifest, not this block)
+/scripts/conventions_ratchet.py
+/scripts/conventions_readers.py
+# END vendored-copies

@@ -40,6 +40,7 @@ import numpy as np
 from PIL import Image, ImageFilter
 
 from .cmyk_convert import _gs_png_render_argv, _resolve_ghostscript
+from .subprocess_limits import GHOSTSCRIPT_PAGE_TIMEOUT_S, INKSCAPE_RENDER_TIMEOUT_S
 from .svg_to_pdf import _resolve_inkscape
 
 log = logging.getLogger(__name__)
@@ -141,10 +142,16 @@ def _render_svg_png(svg_path: Path, png_path: Path, dpi: int, inkscape_exe: str)
         "--export-background=#ffffff",
         "--export-background-opacity=1",
     ]
-    result = subprocess.run(
-        cmd, capture_output=True, text=True,
-        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-    )
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            timeout=INKSCAPE_RENDER_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RenderCheckError(
+            f"Inkscape SVG→PNG timed out after {INKSCAPE_RENDER_TIMEOUT_S}s on {svg_path.name}"
+        ) from exc
     if result.returncode != 0 or not png_path.is_file():
         raise RenderCheckError(
             f"Inkscape SVG→PNG failed (exit {result.returncode}) on {svg_path.name}: "
@@ -156,10 +163,16 @@ def _render_pdf_png(pdf_path: Path, png_path: Path, dpi: int, gs_exe: str) -> No
     """Render the first PDF page to PNG with Ghostscript (the export under test)."""
     bin_path = _resolve_ghostscript(gs_exe)
     cmd = _gs_png_render_argv(bin_path, pdf_path, png_path, dpi)
-    result = subprocess.run(
-        cmd, capture_output=True, text=True,
-        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-    )
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            timeout=GHOSTSCRIPT_PAGE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RenderCheckError(
+            f"Ghostscript PDF→PNG timed out after {GHOSTSCRIPT_PAGE_TIMEOUT_S}s on {pdf_path.name}"
+        ) from exc
     if result.returncode != 0 or not png_path.is_file():
         raise RenderCheckError(
             f"Ghostscript PDF→PNG failed (exit {result.returncode}) on {pdf_path.name}: "

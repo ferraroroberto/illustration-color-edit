@@ -106,6 +106,7 @@ illustration-color-edit/
 │   ├── semantic_palette.py # named slots + themes layered over hex mappings
 │   ├── print_safety.py     # gray-value warnings for uncoated paper
 │   ├── svg_to_pdf.py       # Inkscape wrapper: SVG → RGB PDF at trim size
+│   ├── subprocess_limits.py# timeouts for every Ghostscript / Inkscape call
 │   ├── cmyk_convert.py     # Ghostscript wrapper: RGB PDF → CMYK PDF via ICC
 │   ├── cmyk_pipeline.py    # CMYK pipeline orchestrator (single + batch + soft-proof)
 │   ├── cmyk_tac.py         # Total Area Coverage check (max/mean/p99 per page)
@@ -565,6 +566,11 @@ palette, color-blind risk, delivery snapshots), see
 Unit tests cover `svg_parser`, `color_mapper`, and `mapping_store` — including
 the tricky cases: `<style>` blocks, named colors, `rgb(...)`, 3-digit
 shorthand, malformed input, and nearest-color edge cases.
+
+Every Ghostscript and Inkscape call states a timeout (`src/subprocess_limits.py`), and an
+expiry raises the module's own error naming it. `tests/test_conventions_ratchet.py` runs the
+vendored conventions ratchet (`scripts/conventions_ratchet.py`, rule `subprocess-timeout`
+from `.fleet.toml`) inside the pytest run, so a new unbounded `subprocess.run` fails it.
 
 ## SVG coverage
 
