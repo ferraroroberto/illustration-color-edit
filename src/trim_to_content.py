@@ -40,6 +40,8 @@ from typing import Optional
 from PIL import Image
 from lxml import etree
 
+from .subprocess_limits import INKSCAPE_RENDER_TIMEOUT_S
+
 log = logging.getLogger(__name__)
 
 # SVG default user-units-per-inch. Affinity exports use this.
@@ -155,10 +157,16 @@ def _query_drawing_bbox(
             "--export-background-opacity=0",  # transparent bg
             str(svg_path),
         ]
-        result = subprocess.run(
-            cmd, capture_output=True, text=True,
-            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-        )
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                timeout=INKSCAPE_RENDER_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise TrimError(
+                f"Inkscape render for trim timed out after {INKSCAPE_RENDER_TIMEOUT_S}s on {svg_path.name}"
+            ) from exc
         if result.returncode != 0 or not png.is_file():
             raise TrimError(
                 f"Inkscape render for trim failed on {svg_path.name}: "

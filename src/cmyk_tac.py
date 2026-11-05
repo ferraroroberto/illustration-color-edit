@@ -34,6 +34,7 @@ import numpy as np
 from PIL import Image
 
 from .cmyk_convert import GhostscriptNotFoundError, _resolve_ghostscript
+from .subprocess_limits import GHOSTSCRIPT_PAGE_TIMEOUT_S
 
 log = logging.getLogger(__name__)
 
@@ -99,10 +100,16 @@ def _render_cmyk_tiff(
         str(pdf_path),
     ]
     log.debug("Ghostscript TAC raster: %s", cmd)
-    result = subprocess.run(
-        cmd, capture_output=True, text=True,
-        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-    )
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            timeout=GHOSTSCRIPT_PAGE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise TacComputeError(
+            f"Ghostscript tiff32nc timed out after {GHOSTSCRIPT_PAGE_TIMEOUT_S}s on {pdf_path.name}"
+        ) from exc
     if result.returncode != 0 or not tiff_path.is_file():
         raise TacComputeError(
             f"Ghostscript tiff32nc failed (exit {result.returncode}) on "

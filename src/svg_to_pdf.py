@@ -21,6 +21,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .subprocess_limits import INKSCAPE_RENDER_TIMEOUT_S
+
 log = logging.getLogger(__name__)
 
 # Inkscape's CLI uses 96 user units = 1 inch by default for non-page exports;
@@ -107,10 +109,16 @@ def svg_to_pdf(
              svg_path.name, pdf_path.name, width_inches, height_inches, bleed_inches)
     log.debug("Inkscape command: %s", cmd)
 
-    result = subprocess.run(
-        cmd, capture_output=True, text=True,
-        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-    )
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            timeout=INKSCAPE_RENDER_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise SvgToPdfError(
+            f"Inkscape timed out after {INKSCAPE_RENDER_TIMEOUT_S}s on {svg_path.name}"
+        ) from exc
     if result.returncode != 0:
         raise SvgToPdfError(
             f"Inkscape failed (exit {result.returncode}) on {svg_path.name}: "

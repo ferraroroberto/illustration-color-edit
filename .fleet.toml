@@ -6,3 +6,17 @@ layer       = "working-pipe"
 icon        = "🎨"
 port        = 8503
 description = "SVG pipelines for book art."
+
+# Held to the fleet's subprocess-timeout convention: every Ghostscript and Inkscape call states a
+# timeout. tests/test_conventions_ratchet.py runs the ratchet inside the pytest run and fails when a
+# count rises above .conventions-ratchet-baseline.json (empty). Only this rule is enabled; the
+# creationflags convention has its own test (tests/test_no_window_flags.py).
+# Mechanism + limits: project-scaffolding docs/conventions-ratchet.md.
+[conventions_ratchet]
+enabled = true
+rules   = ["subprocess-timeout"]
+
+# Vendor-verbatim copies from project-scaffolding; re-vendor with /propagate-vendored, never edit.
+[vendored]
+conventions_ratchet = { src = "scripts/conventions_ratchet.py", sha = "39ae7582b35fe8ef05441bb5cba65c38b0dfad3f", dest = "scripts/conventions_ratchet.py" }
+conventions_readers = { src = "scripts/conventions_readers.py", sha = "39ae7582b35fe8ef05441bb5cba65c38b0dfad3f", dest = "scripts/conventions_readers.py" }
